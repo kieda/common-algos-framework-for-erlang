@@ -10,4 +10,13 @@
 -author("zkieda").
 
 %% API
--export([]).
+-export([new_plugin/2, update_plugin/2, should_exit/1]).
+
+new_plugin(_, _) -> #{
+  terminate => false
+}.
+
+update_plugin({'receive', 'terminate'}, Plugin) -> maps:put(terminate, true, Plugin);
+update_plugin(_, _) -> ignore.
+
+should_exit(#{terminate := Val}) -> Val.

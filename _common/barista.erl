@@ -41,6 +41,8 @@
 -export([new_state/1, update_state/1,               % caffe implementation
         get_state_info/1, add_signal_to_state/2]).
 
+-export_type([barista_state/0]).
+
 -type plugin_id() :: module().
 
 -record(barista_state, {
@@ -52,7 +54,7 @@
 }).
 
 %% plugin manager state
--opaque barista_state() :: vertex_state(#barista_state{
+-opaque barista_state() :: caffe:vertex_state(#barista_state{
   %% Plugin Specs %%
   plugin_spec_map :: #{ plugin_id() => plugin_spec() },
 
@@ -127,7 +129,7 @@ get_plugin_impl(Plugin, Module, FunctionName) when
   %   or none
   {{F1, A1}, {F2, A2}, Required} = case FunctionName of
                            update_plugin    -> {{update_plugin, 2}, {update_state, 2}, true};
-                           invariant        -> {{invariant, 2}, {invariant, 3}, false};
+                           invariant        -> {{invariant, 2}, {invariant, 3}, false}
                          end,
 
   Impl1 = sets:from_list(maps:get(F1, Plugin)),
@@ -155,7 +157,7 @@ load_plugin_spec(PluginID) ->
     dependencies => get_plugin_impl(PluginImpl, PluginID, dependencies),
     unmodifiable => get_plugin_impl(PluginImpl, PluginID, unmodifiable),
     new_plugin   => get_plugin_impl(PluginImpl, PluginID, new_plugin),
-    invariant    => get_plugin_impl(PluginImpl, PluginID, invariant),
+    invariant    => get_plugin_impl(PluginImpl, PluginID, invariant)
   }.
 
 -spec get_plugin_state(PluginID::plugin_id(), State::barista_state()) -> PluginState::plugin_state().
@@ -170,25 +172,24 @@ process_order_helper(Message, State0 = #barista_state{plugin_spec_map = PluginSp
   % extract Spec
   % todo - should we add enforcement onto the dependencies?
   % todo   Possibly have a current_plugin in the State, and ensure one plugin can only send an order to a dependent
-  #{ dependencies => Dependencies, unmodifiable => Unmodifiable,
-      update_plugin => UpdatePlugin,
-      invariant => Invariant } = Spec,
+  #{ dependencies := Dependencies, unmodifiable := Unmodifiable,
+      update_plugin := UpdatePlugin, invariant := Invariant } = Spec,
 
   {PluginStateNew, StateNew, Ignored} = case UpdatePlugin of
-    {Mod, update_state, 2} ->
+    {PluginMod, update_state, 2} ->
       % update state
-      case apply(Mod, update_state, [Message, {PluginState0, State0}]) of
+      case apply(PluginMod, update_state, [Message, {PluginState0, State0}]) of
         % plugin ignores this message
         ignore -> {PluginState0, State0, true};
         % merge plugin state, use updated state
-        {PluginState1, State1} -> {PluginState1, State0#barista_state{plugin_state_map = maps:update(Mod, PluginState1, State1)}, false}
+        {PluginState1, State1} -> {PluginState1, State0#barista_state{plugin_state_map = maps:update(PluginMod, PluginState1, State1)}, false}
       end;
-    {Mod, update_plugin, 2} ->
-      case apply(Mod, update_plugin, [Message, PluginState0]) of
+    {PluginMod, update_plugin, 2} ->
+      case apply(PluginMod, update_plugin, [Message, PluginState0]) of
         % plugin ignores this message
         ignore -> {PluginState0, State0, true};
         % merge plugin state
-        PluginState1 -> {PluginState1, State0#barista_state{plugin_state_map = maps:update(Mod, PluginState1, PluginStates)}, false}
+        PluginState1 -> {PluginState1, State0#barista_state{plugin_state_map = maps:update(PluginMod, PluginState1, PluginStates)}, false}
       end
   end,
 
@@ -215,8 +216,8 @@ process_order_helper(_, State, []) -> State.
 
 %%% Implementation %%%
 -spec new_state(caffe_graph:vertex_args()) -> barista_state().
-new_state(Args = #{barista_user_func => UserFunc,
-  barista_plugin_list => Plugins}) ->
+new_state(Args = #{barista_user_func := UserFunc,
+  barista_plugin_list := Plugins}) ->
 
   % we auto-load all dependent plugins, order them such that dependent plugins are before plugins that depend on it
   {Dag, LoadedPlugins} = create_plugin_dag(Plugins),
@@ -234,7 +235,7 @@ new_state(Args = #{barista_user_func => UserFunc,
        PluginState = apply(Module, Function, [Args, State]),
        State#barista_state{plugin_state_map = maps:put(PluginID, PluginState, PluginStates)}
      end, InitialState, PluginList);
-new_state(Args = #{barista_plugin_list => _}) -> new_state(maps:put(barista_user_func, none, Args)).
+new_state(Args = #{barista_plugin_list := _}) -> new_state(maps:put(barista_user_func, none, Args)).
 
 -spec update_state(barista_state()) -> barista_state().
 update_state(State0 = #barista_state{incoming = [Order|Rest]}) ->
@@ -246,7 +247,7 @@ update_state(State0 = #barista_state{incoming = [], user_func = UserFunc}) ->
 
 -spec add_signal_to_state(barista_state(), Signal::any()) -> barista_state().
 add_signal_to_state(State0 = #barista_state{incoming = Incoming}, Signal) ->
-  State0#{incoming = [Signal|Incoming]}.
+  State0#barista_state{incoming = [Signal|Incoming]}.
 
 -spec get_state_info(barista_state()) -> caffe:state_info().
 get_state_info(State) ->
@@ -273,7 +274,7 @@ load_plugin_vertices(Dag, [Module|Plugins], LoadedPluginMap) ->
       Dependencies = maps:get(dependencies, PluginSpec),
       load_plugin_vertices(Dag, Dependencies ++ Plugins, maps:put(Module, PluginSpec, LoadedPluginMap))
   end;
-load_plugin_vertices(Dag, [], LoadedPluginMap) -> LoadedPluginMap.
+load_plugin_vertices(_, [], LoadedPluginMap) -> LoadedPluginMap.
 
 -spec flatten_plugin_dag(plugin_dag()) -> [plugin_id()].
 flatten_plugin_dag(Dag) -> digraph_utils:preorder(Dag).

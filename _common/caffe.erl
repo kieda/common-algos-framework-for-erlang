@@ -47,7 +47,7 @@
 % update state
 -type update_state(State)
   :: { anonymous, fun((State) -> State) }
-   | { named, modue(), atom()}.
+   | { named, module(), atom()}.
 
 % adds a signal to the state
 -type add_signal_to_state(State)
@@ -60,20 +60,20 @@
   :: { anonymous, fun((State) -> state_info())}
    | { named, module(), atom() }.
 
+-record(caffe_params, {
+  wave_wait_time  = 0,
+  capture_signal  = true,
+  receive_time    = 0
+}).
+
 -type caffe_params() :: #caffe_params{
   % how long should we wait in between waves?
   wave_wait_time  :: non_neg_integer(),
   % should we capture incoming messages?
   capture_signal  :: boolean(),
   % if so, how long should we wait?
-  receive_time    :: non_neg_integer()|infinity()
+  receive_time    :: non_neg_integer()|infinity
 }.
-
--record(caffe_params, {
-  wave_wait_time  = 0,
-  capture_signal  = true,
-  receive_time    = 0
-}).
 
 -record(caffe_functions, { new_state, update_state, get_state_info, add_signal_to_state = none }).
 -type caffe_functions(State) :: #caffe_functions{
@@ -95,14 +95,14 @@
 }.
 
 % function to translate args to an initial state, then run a loop on the state & args.
--spec open_caffe(caffe_graph:vertex_args()) -> State.
+-spec open_caffe(caffe_graph:vertex_args()) -> State::any().
 open_caffe(Args) ->
     CaffeParams = get_caffe_params(Args),
     CaffeFuns = #caffe_functions{new_state = NewState} = get_caffe_functions(Args),
     State = caffe_util:apply_function_spec(NewState, [Args]),
     open_caffe_helper(State, CaffeParams, CaffeFuns).
 
--spec open_caffe_helper(vertex_state(StateModel), caffe_params(StateModel), caffe_functions(StateModel)) -> (vertex_state(StateModel)) | no_return().
+-spec open_caffe_helper(vertex_state(StateModel), caffe_params(), caffe_functions(StateModel)) -> (vertex_state(StateModel)) | no_return().
 open_caffe_helper(State1,
     CaffeParams = #caffe_params{ wave_wait_time = WaitTime, capture_signal = CaptureSignal, receive_time = ReceiveTime},
     CaffeFuns = #caffe_functions{ update_state = UpdateState, add_signal_to_state = AddSignal, get_state_info = GetStateInfo }) ->
@@ -144,8 +144,8 @@ get_caffe_params(VertexArgs) ->
     capture_signal = maps:get(caffe_capture_signal, VertexArgs, Default#caffe_params.capture_signal),
     receive_time = maps:get(caffe_capture_time, VertexArgs, Default#caffe_params.receive_time)}.
 
--spec get_state_info_default() -> get_state_info(State).
-get_state_info_default() -> {anonymous, fun(_) -> #state_info end}.
+-spec get_state_info_default() -> get_state_info(any()).
+get_state_info_default() -> {anonymous, fun(_) -> #state_info{} end}.
 
 % Specify the following in VertexArgs:
 %   Either:
@@ -157,22 +157,22 @@ get_state_info_default() -> {anonymous, fun(_) -> #state_info end}.
 %     caffe_module_impl      - module that contains function implementations: new_state, update_state, and (optionally) add_signal_to_state
 -spec get_caffe_functions(caffe_graph:vertex_args()) -> #caffe_functions{}.
 
-get_caffe_functions(#{caffe_new_state => New, caffe_update_state => Update,
-    caffe_add_order => AddSignal, caffe_get_state_info => GetStateInfo}) ->
+get_caffe_functions(#{caffe_new_state := New, caffe_update_state := Update,
+    caffe_add_order := AddSignal, caffe_get_state_info := GetStateInfo}) ->
   #caffe_functions{new_state = New,
     update_state = Update,
     get_state_info = GetStateInfo,
     add_signal_to_state = AddSignal};
 
-get_caffe_functions(R = #{caffe_new_state => _, caffe_update_state => _,
-    caffe_add_order => _}) ->
+get_caffe_functions(R = #{caffe_new_state := _, caffe_update_state := _,
+    caffe_add_order := _}) ->
   get_caffe_functions(maps:put(caffe_get_state_info, get_state_info_default(), R));
 
-get_caffe_functions(R = #{caffe_new_state => _, caffe_update_state => _,
-  caffe_get_state_info => _}) ->
+get_caffe_functions(R = #{caffe_new_state := _, caffe_update_state := _,
+  caffe_get_state_info := _}) ->
   get_caffe_functions(maps:put(caffe_get_state_info, none, R));
 
-get_caffe_functions(#{caffe_module_impl => Module}) ->
+get_caffe_functions(#{caffe_module_impl := Module}) ->
   #caffe_functions{new_state = {named, Module, new_state},
     update_state = {named, Module, update_state},
     get_state_info = case caffe_util:is_exported(Module, get_state_info, 1) of

@@ -15,7 +15,7 @@
 
 % diff maps or whatever deep
 diff_deep(A, B) ->
-  ().
+  #{}.
 
 is_exported(M, F, A) ->
   case erlang:module_loaded(M) of
@@ -24,7 +24,7 @@ is_exported(M, F, A) ->
   end,
   erlang:function_exported(M, F, A).
 
--spec get_exported(module(), set(atom())) -> #{atom() => [Arity::non_neg_integer()]}.
+-spec get_exported(module(), sets:set(atom())) -> #{atom() => [Arity::non_neg_integer()]}.
 get_exported(M, Functions) ->
   case erlang:module_loaded(M) of
     false -> code:ensure_loaded(M);
@@ -35,7 +35,7 @@ get_exported(M, Functions) ->
     {exports, E} -> E;
     _ -> []
   end,
-  Matching = lists:filter(fun({F, _}) -> is_element(F, Functions) end, ExportList),
+  Matching = lists:filter(fun({F, _}) -> sets:is_element(F, Functions) end, ExportList),
   lists:foldr(fun({F, Arity}, Map) -> maps:update_with(F, fun(A) -> [Arity|A] end, [Arity], Map) end, maps:new(), Matching).
 
 apply_function_spec({anonymous, Fun}, Args) -> apply(Fun, Args);

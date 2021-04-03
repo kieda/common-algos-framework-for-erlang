@@ -4,12 +4,20 @@
 # the generic make script is installed (erlang).                      #
 #######################################################################
 # code to compile
-SOURCE = _common/distributed_networks.erl \
-	
+SOURCE = _common/caffe_util.erl \
+	_common/caffe_graph.erl \
+	_common/caffe.erl \
+	_common/barista.erl \
+	_system_plugins/graph_state.erl \
+	_system_plugins/plugin_manager.erl \
+	_system_plugins/terminator.erl \
+	chapter2/lamport_clock.erl \
+	chapter2/vector_clock.erl
 
 #Where include files are stored ".hrl"
-EFLAGS = #-I../include \
-#	 -I../dummy1/include
+EFLAGS = -I _common \
+ 	 -I _system_plugins \
+	 -I chapter2
 
 
 #######################################################################
@@ -21,7 +29,7 @@ EFLAGS = #-I../include \
 ####################################################################### 
 #Compiles the code into out dir. relative to the source dir. 
 ERLHOME = /usr/local
-EBIN = out
+EBIN = ../out
 ERL = erl
 GEN = beam
 ERLC_EMULATOR = erl -boot start_clean

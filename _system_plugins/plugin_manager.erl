@@ -12,7 +12,7 @@
 -module(plugin_manager).
 -author("zkieda").
 
-new_plugin(VertexArgs, State) -> #{}.
-
 %% API
 -export([]).
+
+new_plugin(VertexArgs, State) -> #{}.

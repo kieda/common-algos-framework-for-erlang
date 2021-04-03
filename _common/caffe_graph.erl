@@ -46,7 +46,8 @@
 -export([merge_common_args/2, new_spawn_vertex_map/1, merge_spawn_process_map/3]).  % 1. building args for 2
 -export([build_network/3, start_network/1, build_and_start_network/3]).             % 2. build to spawn a process for each vertex V
 %                                                                                        start to run user specified vertex_fun for each vertex V, and make connections for each edge E
--export([remove_graph_duplicates/1, make_bidirectional/1]).  % 3. helper functions
+-export([remove_graph_duplicates/1, make_bidirectional/1]).                         % 3. helper functions
+-export([run_vertex_function_delegate/2]).                                          % 4. used internally to run user-specified function
 
 -export_type([graph/0, network/0]).                                                 % 1. graph {V,E} specification,
 %                                                                                        representation of running Graph
@@ -69,7 +70,7 @@
   vertex        := vertex(),                    % this vertex
   outgoing      := #{vertex() => identifier()}, % known outgoing edges with respective identifier/PID
   outgoing_vertices := vertex_list(),           % list of outgoing vertices on network
-  spawn_vertex_function_spec := function_spec(),     % function def used spawn this node
+  spawn_vertex_function_spec := function_spec(any()),     % function def used spawn this node
 
   %% user-specified %%
   start_signal_timeout   => integer(),          % timeout to receive initial start signal for a node
@@ -102,7 +103,7 @@ new_spawn_vertex_map(SpawnProcessList) ->
   ).
 
 %% Adds/overwrites the values in SpawnVertexMap with the new SpawnVertexFunctionSpec for each vertex V
--spec merge_spawn_process_map(spawn_vertex_map(), vertex_list(), function_spec(Val)) -> spawn_vertex_map().
+-spec merge_spawn_process_map(spawn_vertex_map(), vertex_list(), function_spec(any())) -> spawn_vertex_map().
 merge_spawn_process_map(SpawnVertexMap, V, SpawnVertexFunction) ->
   MergeSpawnProcessMap = maps:from_list(lists:map(fun(Vertex) -> {Vertex, SpawnVertexFunction} end, V)),
   maps:merge(MergeSpawnProcessMap, SpawnVertexMap).
@@ -192,13 +193,14 @@ run_vertex_function_delegate(ArgsMap, SpawnVertexFunctionDelegate) ->
   InitTimeout = maps:get(start_signal_timeout, ArgsMap, ?DEFAULT_START_SIGNAL_TIMEOUT),
   receive
     {From, start, SentMapArgs} ->
+      io:fwrite("Got start signal from ~w\n", [From]),
       caffe_util:apply_function_spec(SpawnVertexFunctionDelegate, [maps:merge(SentMapArgs, ArgsMap)]);
     {From, cancel} -> exit("Vertex construction cancelled, signal from " ++ From)
   after InitTimeout -> exit("Timeout after initialization")
   end.
 
 %% Spawns a vertex, returns its PID
--spec spawn_vertex(function_spec(Val), vertex_args()) -> identifier().
+-spec spawn_vertex(function_spec(any()), vertex_args()) -> identifier().
 spawn_vertex(SpawnVertexFunctionSpec, SpawnVertexArgs) ->
   % the function we spawn wraps the user-specified function for the vertex,
   % which is connected to its outgoing edges when it starts
@@ -235,8 +237,8 @@ check_vertices_exist({V, E}) ->
     {A, B} <- E, (AMissing = not maps:is_key(A, VMap)) or (BMissing = not maps:is_key(B, VMap))
   ],
   case size(BadEdges) of
-    BadEdgeSize -> throw({[non_existent_vertices], [BadEdges], BadEdgeSize ++ " non-existent vertices!"});
-    0 -> ok
+    0 -> ok;
+    BadEdgeSize -> throw({[non_existent_vertices], [BadEdges], BadEdgeSize ++ " non-existent vertices!"})
   end.
 
 % Functions - public utility
