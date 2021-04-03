@@ -37,7 +37,6 @@
 
 %% Default Values %%
 -define(DEFAULT_START_SIGNAL_TIMEOUT, 2500). % default value for start_signal_timeout
--define(DEFAULT_IS_GRAPH_BIDIRECTIONAL, false).
 
 %% Exports %%
 -export([remove_graph_duplicates/1, make_bidirectional/1]).
@@ -63,7 +62,7 @@
   vertex        := vertex(),                    % this vertex
   outgoing      := #{vertex() => identifier()}, % known outgoing edges with respective identifier/PID
   outgoing_vertices := vertex_list(),           % list of outgoing vertices on network
-  spawn_vertex_function_spec := spawn_vertex_function_spec(),     % function def used spawn this node
+  spawn_vertex_function_spec := function_spec(),     % function def used spawn this node
 
   %% user-specified %%
   start_signal_timeout   => integer(),          % timeout to receive initial start signal for a node
@@ -72,12 +71,12 @@
 -type vertex_args_map() :: #{ vertex() => vertex_args() }.
 
 % Types - Vertex - Function
--type spawn_vertex_anonymous_fun() :: fun((vertex_args()) -> any()).
--type spawn_vertex_function_spec() :: { anonymous, spawn_vertex_anonymous_fun() } | { named, module(), Function::atom() }.
+-type vertex_fun() :: fun((vertex_args()) -> Val::any()).
+-type function_spec() :: { anonymous, vertex_fun() } | { named, module(), Function::atom() }.
 
 % Types - Vertex - Many
--type spawn_vertex_map() :: #{ vertex() => spawn_vertex_function_spec() }.    % specifies function that should run on each vertex
--type spawn_vertex_list() :: [{vertex_list(), spawn_vertex_function_spec()}]. % specifies a subset of vertices and a common function that should run on each vertex
+-type spawn_vertex_map() :: #{ vertex() => function_spec() }.    % specifies function that should run on each vertex
+-type spawn_vertex_list() :: [{vertex_list(), function_spec()}]. % specifies a subset of vertices and a common function that should run on each vertex
 
 % Types - Network
 -type network() :: { #{ vertex() => { identifier(), vertex_args() } }, #{ vertex() => #{ vertex() => identifier() } } }.
@@ -96,7 +95,7 @@ new_spawn_vertex_map(SpawnProcessList) ->
   ).
 
 %% Adds/overwrites the values in SpawnVertexMap with the new SpawnVertexFunctionSpec for each vertex V
--spec merge_spawn_process_map(spawn_vertex_map(), vertex_list(), spawn_vertex_function_spec()) -> spawn_vertex_map().
+-spec merge_spawn_process_map(spawn_vertex_map(), vertex_list(), function_spec()) -> spawn_vertex_map().
 merge_spawn_process_map(SpawnVertexMap, V, SpawnVertexFunctionSpec) ->
   MergeSpawnProcessMap = maps:from_list(lists:map(fun(Vertex) -> {Vertex, SpawnVertexFunctionSpec} end, V)),
   maps:merge(MergeSpawnProcessMap, SpawnVertexMap).
@@ -176,7 +175,7 @@ start_network({BuiltNetworkMap, OutgoingIdentifiers}) ->
 
 %% Function used to run the delegate. Any additional args received from the start signal are
 %% merged into the original args. This args map is passed to the delegate as its only argument
--spec run_vertex_function_delegate(vertex_args(), spawn_vertex_function_spec()) -> any().
+-spec run_vertex_function_delegate(vertex_args(), function_spec()) -> any().
 run_vertex_function_delegate(ArgsMap, SpawnVertexFunctionDelegate) ->
   %% wrap network process so we can send args to it after the graph has been built completely.
   %% done so we can send PIDs of other processes to the node after all PIDs have been created.
@@ -189,7 +188,7 @@ run_vertex_function_delegate(ArgsMap, SpawnVertexFunctionDelegate) ->
   end.
 
 %% Spawns a vertex, returns its PID
--spec spawn_vertex(spawn_vertex_function_spec(), vertex_args()) -> identifier().
+-spec spawn_vertex(function_spec(), vertex_args()) -> identifier().
 spawn_vertex(SpawnVertexFunctionSpec, SpawnVertexArgs) ->
   spawn_function_spec({named, ?MODULE, run_vertex_function_delegate}, [SpawnVertexArgs, SpawnVertexFunctionSpec]).
 
