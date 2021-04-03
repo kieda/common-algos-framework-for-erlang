@@ -1,13 +1,14 @@
 %%%-------------------------------------------------------------------
 %%% @author zkieda
 %%% @doc First draft of generic library to deploy distributed algorithms.
-%%%  Core concept - user specifies a graph and a function to run on each vertex.
+%%%  Core concept - user specifies a graph {V, E} and a function to run for each V.
+%%%  Connections are made along E.
 %%%
-%%%  When graph is initialized, outgoing vertices (as PIDs) are sent to the function
-%%%  as a parameter.
+%%%  Outgoing vertices (as PIDs) are sent to each spawned process
+%%%  for its outgoing edges in E when the graph is started.
 %%%
 %%%  User can specify additional parameters to be passed to each vertex as #{ atom() => any() }.
-%%%  The following system atoms are merged into this map :
+%%%  The following system keys are merged into this map :
 %%%  * graph - the network graph
 %%%  * vertex - this vertex
 %%%  * outgoing - map of outgoing channels, vertex/PID pairs
@@ -29,22 +30,28 @@
 %%%   Perhaps do some galaxy brain shit where we generate more graph from an existing graph and
 %%%   update the existing one
 %%%
+%%%   todo: (late-term) look at erlang Map r/w performance & space usage. What is their storage complexity?
+%%%   todo:             Read and write are O(log(n)), but how does it stack up to real world access times?
+%%%   todo:             Nesting maps? Medium brain idea: make library for flattened map where we access it via a list of keys
 %%% @end
 %%% Created : 21. Mar 2021 8:18 PM
 %%%-------------------------------------------------------------------
--module(network_graph).
+-module(caffe_graph).
 -author("zkieda").
 
 %% Default Values %%
 -define(DEFAULT_START_SIGNAL_TIMEOUT, 2500). % default value for start_signal_timeout
 
 %% Exports %%
--export([remove_graph_duplicates/1, make_bidirectional/1]).
--export([merge_common_args/2, new_spawn_vertex_map/1, merge_spawn_process_map/3]).
--export([build_network/3, start_network/1, build_and_start_network/3]).
--export([run_vertex_function_delegate/2]).
--export_type([network/0, graph/0]).
--export_type([spawn_vertex_list/0, spawn_vertex_map/0]).
+-export([merge_common_args/2, new_spawn_vertex_map/1, merge_spawn_process_map/3]).  % 1. building args for 2
+-export([build_network/3, start_network/1, build_and_start_network/3]).             % 2. build to spawn a process for each vertex V
+%                                                                                        start to run user specified vertex_fun for each vertex V, and make connections for each edge E
+-export([remove_graph_duplicates/1, make_bidirectional/1]).  % 3. helper functions
+
+-export_type([graph/0, network/0]).                                                 % 1. graph {V,E} specification,
+%                                                                                        representation of running Graph
+-export_type([spawn_vertex_list/0, spawn_vertex_map/0]).                            % 2. args to spawn network using a list,
+%                                                                                        args to spawn network using a map
 
 %% Types %%
 
@@ -71,12 +78,12 @@
 -type vertex_args_map() :: #{ vertex() => vertex_args() }.
 
 % Types - Vertex - Function
--type vertex_fun() :: fun((vertex_args()) -> Val::any()).
--type function_spec() :: { anonymous, vertex_fun() } | { named, module(), Function::atom() }.
+-type vertex_fun(Val) :: fun((vertex_args()) -> Val).
+-type function_spec(Val) :: { anonymous, vertex_fun(Val) } | { named, module(), atom() }.
 
 % Types - Vertex - Many
--type spawn_vertex_map() :: #{ vertex() => function_spec() }.    % specifies function that should run on each vertex
--type spawn_vertex_list() :: [{vertex_list(), function_spec()}]. % specifies a subset of vertices and a common function that should run on each vertex
+-type spawn_vertex_map() :: #{ vertex() => function_spec(any()) }.        % specifies function that should run on each vertex
+-type spawn_vertex_list() :: [ { vertex_list(), function_spec(any()) } ]. % specifies a subset of vertices and a common function that should run on each vertex
 
 % Types - Network
 -type network() :: { #{ vertex() => { identifier(), vertex_args() } }, #{ vertex() => #{ vertex() => identifier() } } }.
@@ -95,9 +102,9 @@ new_spawn_vertex_map(SpawnProcessList) ->
   ).
 
 %% Adds/overwrites the values in SpawnVertexMap with the new SpawnVertexFunctionSpec for each vertex V
--spec merge_spawn_process_map(spawn_vertex_map(), vertex_list(), function_spec()) -> spawn_vertex_map().
-merge_spawn_process_map(SpawnVertexMap, V, SpawnVertexFunctionSpec) ->
-  MergeSpawnProcessMap = maps:from_list(lists:map(fun(Vertex) -> {Vertex, SpawnVertexFunctionSpec} end, V)),
+-spec merge_spawn_process_map(spawn_vertex_map(), vertex_list(), function_spec(Val)) -> spawn_vertex_map().
+merge_spawn_process_map(SpawnVertexMap, V, SpawnVertexFunction) ->
+  MergeSpawnProcessMap = maps:from_list(lists:map(fun(Vertex) -> {Vertex, SpawnVertexFunction} end, V)),
   maps:merge(MergeSpawnProcessMap, SpawnVertexMap).
 
 
@@ -175,21 +182,26 @@ start_network({BuiltNetworkMap, OutgoingIdentifiers}) ->
 
 %% Function used to run the delegate. Any additional args received from the start signal are
 %% merged into the original args. This args map is passed to the delegate as its only argument
--spec run_vertex_function_delegate(vertex_args(), function_spec()) -> any().
+%%
+%% Outgoing edges are connected and delegate is run on start signal
+%% Exits when it receives a cancel signal or after a specified start_signal_timeout millis
+-spec run_vertex_function_delegate(vertex_args(), function_spec(Val)) -> Val | no_return().
 run_vertex_function_delegate(ArgsMap, SpawnVertexFunctionDelegate) ->
   %% wrap network process so we can send args to it after the graph has been built completely.
   %% done so we can send PIDs of other processes to the node after all PIDs have been created.
   InitTimeout = maps:get(start_signal_timeout, ArgsMap, ?DEFAULT_START_SIGNAL_TIMEOUT),
   receive
     {From, start, SentMapArgs} ->
-      apply_function_spec(SpawnVertexFunctionDelegate, [maps:merge(SentMapArgs, ArgsMap)]);
+      caffe_util:apply_function_spec(SpawnVertexFunctionDelegate, [maps:merge(SentMapArgs, ArgsMap)]);
     {From, cancel} -> exit("Vertex construction cancelled, signal from " ++ From)
   after InitTimeout -> exit("Timeout after initialization")
   end.
 
 %% Spawns a vertex, returns its PID
--spec spawn_vertex(function_spec(), vertex_args()) -> identifier().
+-spec spawn_vertex(function_spec(Val), vertex_args()) -> identifier().
 spawn_vertex(SpawnVertexFunctionSpec, SpawnVertexArgs) ->
+  % the function we spawn wraps the user-specified function for the vertex,
+  % which is connected to its outgoing edges when it starts
   spawn_function_spec({named, ?MODULE, run_vertex_function_delegate}, [SpawnVertexArgs, SpawnVertexFunctionSpec]).
 
 %%
@@ -254,20 +266,6 @@ build_network_map(G = {V, E}) ->
   % Add Edges to map
   lists:foldl(fun({A, B}, Map) -> maps:update_with(A, fun(Acc) -> [B|Acc] end, Map) end, BaseVerticesMap, E).
 
-apply_function_spec({anonymous, Fun}, Args) -> apply(Fun, Args);
-apply_function_spec({named, ModuleName, FunctionName}, Args) -> apply(ModuleName, FunctionName, Args).
-
 spawn_function_spec({anonymous, Fun}, Args) -> spawn(Fun, Args);
 spawn_function_spec({named, ModuleName, FunctionName}, Args) -> spawn(ModuleName, FunctionName, Args).
 
-%%%  Graph Update Functions
-%%%   Given an existing generated and running network graph, provide functionality to do the
-%%%   following:
-%%%   * Add or remove edges from the network graph
-%%%   * Add or remove vertices from the network graph
-%%%   * Extend current network graph
-%%%   All relevant data we track is updated as a result of any graph modification.
-%%%
-%%%   Note that all modifications might not be possible depending on the vertex we're running on. This is because a vertex
-%%%   can only message its outgoing vertices.
-%%%

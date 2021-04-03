@@ -1,6 +1,5 @@
 %%%-------------------------------------------------------------------
 %%% @author zkieda
-%%% @copyright (C) 2021, <COMPANY>
 %%% @doc
 %%%
 %%%   Common algo framework for Erlang (caffe) separates the distributed algorithm
@@ -20,7 +19,7 @@
 %%% @end
 %%% Created : 30. Mar 2021 11:17 AM
 %%%-------------------------------------------------------------------
--module(caffe_state).
+-module(caffe).
 -author("zkieda").
 
 %%% API to modify state in your caffe %%%
@@ -116,7 +115,8 @@ open_caffe_helper(State1,
     % otherwise update state & loop
     true ->
       % if we should capture signals, do so and add to the state
-      State2 = if CaptureSignal andalso AddSignal /= none ->
+      State2 = if CaptureSignal andalso AddSignal =/= none ->
+          % todo - batch received signals?
           receive
             Any -> caffe_util:apply_function_spec(AddSignal, [State1, Any])
           after ReceiveTime -> State1
