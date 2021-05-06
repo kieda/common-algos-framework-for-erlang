@@ -2,7 +2,7 @@
 
 * Is a framework to create and deploy distributed algos on a graph G = (V, E). 
 * Separates user logic from distributed algos running on each vertex
-* Distributed algos are composable via plug-in manager barista (yet to come up with witty acronym for this one - ya i know it's a stretch)
+* Distributed algos are composable via plug-ins
 
 ### Example Usage
 
