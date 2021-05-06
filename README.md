@@ -4,11 +4,15 @@
 * Separates user logic from distributed algos running on each vertex
 * Distributed algos are composable via plug-in manager barista (yet to come up with witty acronym for this one - ya i know it's a stretch)
 
-### Example Usage (WIP - find elegant API)
-<code>
-  G = {V, E} = {[a, b, c, d], [{a, b}, {c, d}, {a, d}, {b, c}].
-  
-  possibly have a helper function in barista.erl that will contain defaults to run the system, with barista -> caffe -> caffe_graph.
-  
-  todo: gather list of arguments that we will eventully specify. How many can we fit in as a default? How many are common across many vertices & can be specified that way?
-</code>
+### Example Usage
+
+    G = {V, E} = caffe_graph:load(graph1),
+    Network = caffe:build( G, caffe:args_from_list( [ { V, { [ lamport_clock ], worker_random_messenger } } ] ) ),
+    caffe:start( Network )
+
+* We load a graph from a module using `caffe_graph:load/1`
+* `worker_random_messenger` represents the user-based function running on each vertex in `V`\
+   This function sends a unique message to a random outgoing edge.
+* `[ lamport_clock ]` represents the set of plugins/distributed algorithms we want to run on top of the user-based function\
+  This algorithm creates a logical clock based on send and receive events\
+  You may specify multiple plugins, and plugins that use other plugins (dependencies) are auto-loaded
