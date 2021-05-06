@@ -29,7 +29,7 @@
 %%%       if invariant is broken, the caffe crashes and burns in a smoldering fire (the process fails)
 %%%
 %%%       another example - invariant on latte is that the espresso_machine is clean - we make latte and clean it up.
-%%%       if the espresso machine is not clean after making a latte, the caffe crashes and burns in hellfire
+%%%       if the espresso machine is not clean after making a latte, again, the caffe crashes and burns in hellfire
 %%% @end
 %%% Created : 01. Apr 2021 10:11 PM
 %%%-------------------------------------------------------------------
@@ -39,9 +39,10 @@
 %% API
 -export([get_plugin_state/2, process_order/2]).     % accessor functions
 -export([new_state/1, update_state/1,               % caffe implementation
-        get_state_info/1, add_signal_to_state/2]).
+        get_state_info/1, add_order/2]).
 
--export_type([barista_state/0]).
+-export_type([barista_state/1]).
+-export_type([plugin_id/0, user_func/1]).
 
 -type plugin_id() :: module().
 
@@ -49,12 +50,13 @@
   plugin_spec_map,
   plugin_state_map,
   plugin_list,
-  user_func = none,
+  user_func,
+  user_state,
   incoming = []
 }).
 
 %% plugin manager state
--opaque barista_state() :: caffe:vertex_state(#barista_state{
+-opaque barista_state(UserState) :: #barista_state{
   %% Plugin Specs %%
   plugin_spec_map :: #{ plugin_id() => plugin_spec() },
 
@@ -64,12 +66,13 @@
   %% Plugins %%
   plugin_list :: [plugin_id()],
 
-  %% User-defined function %%
-  user_func :: user_func(),
+  %% User-defined function & state %%
+  user_func :: user_func(UserState),
+  user_state :: UserState,
 
   %% queued incoming signals %%
   incoming :: [any()]
-}).
+}.
 
 -type plugin_spec() :: #{
   dependencies => [plugin_id()],      % default []
@@ -87,13 +90,38 @@
   any() => any()
 }.
 
-%%% user-defined function to run on vertex
--type user_func() :: { anonymous, fun((barista_state()) -> barista_state())}
-                   | { named, module(), atom() }
-                   | none.
+-type new_state(UserState) ::
+  { anonymous, fun((barista_state(UserState), graph_state:vertex_args(barista_state(UserState))) -> {barista_state(UserState), UserState})}
+  | { named, module(), atom() }.
+
+-type update_state(UserState) ::
+  { anonymous, fun((barista_state(UserState), UserState) -> {barista_state(UserState), UserState})}
+  | { named, module(), atom() }.
+
+%%% user-defined function to run on vertex. Choose between...
+-type user_func(UserState) ::
+  % 1. specify two separate functions
+  {
+    % new_state - create a new state
+    new_state(UserState),
+    % update_state - updates
+    update_state(UserState)
+  }
+
+  % 2. define a module implementation
+  %    new_state/(VertexArgs) -> {State, UserState}
+  %    update_state(State, UserState) -> {State, UserState}
+  | module().
 
 %% we create a digraph with properties private and acyclic
 -type plugin_dag() :: digraph:graph().
+
+%% use this to specify no-op for user_func
+-spec user_func_none() -> user_func(any()).
+user_func_none() -> {
+  fun(X, _) -> {X, none} end,
+  fun(X, Y) -> {X, Y} end
+}.
 
 get_plugin_impl(Plugin, Module, dependencies) ->
   Dependencies = sets:from_list(maps:get(dependencies, Plugin)),
@@ -160,10 +188,10 @@ load_plugin_spec(PluginID) ->
     invariant    => get_plugin_impl(PluginImpl, PluginID, invariant)
   }.
 
--spec get_plugin_state(PluginID::plugin_id(), State::barista_state()) -> PluginState::plugin_state().
+-spec get_plugin_state(plugin_id(), barista_state(_)) -> plugin_state().
 get_plugin_state(PluginID, #barista_state{plugin_state_map = PluginStates}) -> maps:get(PluginID, PluginStates).
 
--spec process_order(Message::any(), State::barista_state()) -> barista_state().
+-spec process_order(Message::any(), barista_state(UserState)) -> barista_state(UserState).
 process_order(Message, State = #barista_state{plugin_list = Plugins}) -> process_order_helper(Message, State, Plugins).
 
 process_order_helper(Message, State0 = #barista_state{plugin_spec_map = PluginSpecs, plugin_state_map = PluginStates}, [Plugin|Plugins]) ->
@@ -215,7 +243,22 @@ process_order_helper(Message, State0 = #barista_state{plugin_spec_map = PluginSp
 process_order_helper(_, State, []) -> State.
 
 %%% Implementation %%%
--spec new_state(caffe_graph:vertex_args()) -> barista_state().
+
+new_user_state({UserState0, _}, State0, Args) ->
+  {State1, UserState1} = caffe_util:apply_function_spec(UserState0, [State0, Args]),
+  State1#barista_state{user_state = UserState1};
+new_user_state(Module, State, Args) ->
+  HasImplementation = caffe_util:is_exported(Module, new_state, 2),
+  if HasImplementation -> new_user_state({{named, Module, new_state}, none}, State, Args) end.
+
+update_user_state({_, UpdateUserState}, State0, UserState0) ->
+  {State1, UserState1} = caffe_util:apply_function_spec(UpdateUserState, [State0, UserState0]),
+  State1#barista_state{user_state = UserState1};
+update_user_state(Module, State, UserState) ->
+  HasImplementation = caffe_util:is_exported(Module, update_state, 2),
+  if HasImplementation -> update_user_state({none, {named, Module, new_state}}, State, UserState) end.
+
+-spec new_state(caffe_graph:vertex_args(barista_state(UserState))) -> barista_state(UserState).
 new_state(Args = #{barista_user_func := UserFunc,
   barista_plugin_list := Plugins}) ->
 
@@ -226,36 +269,38 @@ new_state(Args = #{barista_user_func := UserFunc,
     plugin_spec_map = LoadedPlugins,
     plugin_state_map = #{},
     plugin_list = PluginList,
+    user_state = none,
     user_func = UserFunc},
 
   % creates state according to dag order.
-  lists:foldl(fun(PluginID, State = #barista_state{plugin_state_map = PluginStates, plugin_spec_map = Loaded}) ->
+  State1 = lists:foldl(fun(PluginID, State = #barista_state{plugin_state_map = PluginStates, plugin_spec_map = Loaded}) ->
        % create plugins from args via new_plugin
        {Module, Function, _} = maps:get(new_plugin, maps:get(Loaded, PluginID)),
        PluginState = apply(Module, Function, [Args, State]),
        State#barista_state{plugin_state_map = maps:put(PluginID, PluginState, PluginStates)}
-     end, InitialState, PluginList);
-new_state(Args = #{barista_plugin_list := _}) -> new_state(maps:put(barista_user_func, none, Args)).
+     end, InitialState, PluginList),
+  % create the user_state for the user_func after the plugins have been created and initialized.
+  State1#barista_state{user_state = new_user_state(UserFunc, State1, Args)};
+new_state(Args = #{barista_plugin_list := _}) -> new_state(maps:put(barista_user_func, user_func_none(), Args)).
 
--spec update_state(barista_state()) -> barista_state().
+-spec update_state(barista_state(UserState)) -> barista_state(UserState).
 update_state(State0 = #barista_state{incoming = [Order|Rest]}) ->
-  State1 = process_order({'receive', Order}, State0),
+  State1 = process_order(Order, State0),
   update_state(State1#barista_state{incoming = Rest});
-update_state(State0 = #barista_state{incoming = [], user_func = none}) -> State0;
-update_state(State0 = #barista_state{incoming = [], user_func = UserFunc}) ->
-  caffe_util:apply_function_spec(UserFunc, [State0]).
+update_state(State = #barista_state{incoming = [], user_state = UserState, user_func = UserFunc}) ->
+  update_user_state(UserFunc, State, UserState).
 
--spec add_signal_to_state(barista_state(), Signal::any()) -> barista_state().
-add_signal_to_state(State0 = #barista_state{incoming = Incoming}, Signal) ->
+-spec add_order(barista_state(UserState), Signal::any()) -> barista_state(UserState).
+add_order(State0 = #barista_state{incoming = Incoming}, Signal) ->
   State0#barista_state{incoming = [Signal|Incoming]}.
 
--spec get_state_info(barista_state()) -> caffe:state_info().
+-spec get_state_info(barista_state(any())) -> caffe_old:state_info().
 get_state_info(State) ->
   Terminate = terminator:should_exit(get_plugin_state(terminator, State)),
-  caffe:make_state_info(Terminate).
+  caffe_old:make_state_info(Terminate).
 
 % creates a directed acyclic graph of the plugins
-% exception if user
+% exception if user specifies cyclic dependencies
 -spec create_plugin_dag([plugin_id()]) -> {plugin_dag(), #{ plugin_id() => plugin_spec() }} | {error, _}.
 create_plugin_dag(Plugins) ->
   Dag = digraph:new([private, acyclic]),
@@ -278,47 +323,3 @@ load_plugin_vertices(_, [], LoadedPluginMap) -> LoadedPluginMap.
 
 -spec flatten_plugin_dag(plugin_dag()) -> [plugin_id()].
 flatten_plugin_dag(Dag) -> digraph_utils:preorder(Dag).
-
-% PluginID : module
-
-% PluginState : { plugin_id => PluginID }
-% PluginSpec : { dependencies : [PluginID],
-%                unmodifiable : [atom] }   -- fields in this list are checked for modification
-%
-% Accessible functions:
-%  API? Pass around general state and send events to everyone (better imo, we still want deps tho to ez load correct plugins)
-%   caffe:process_event( Message, State ) -> State
-%   caffe:get_plugin_state( PluginID, State ) -> PluginState
-%
-% Plugin functions needing implementation:
-%   plugin_spec() -> PluginSpec
-
-% Plugin specification:
-%   Plugins = [ lamport_clock, chandylamport ]
-
-%   suppose I have a plugin - qwerty - that wants to change the graph plugin using the publicly
-%   accessible functions in the graph module.
-%
-% graph plugin
-% state:
-%   graph         := graph(),                     % the network graph
-%   vertex        := vertex(),                    % this vertex
-%   outgoing      := #{vertex() => identifier()}, % known outgoing edges with respective identifier/PID
-%   outgoing_vertices := vertex_list(),           % list of outgoing vertices on network
-%   spawn_vertex_function_spec := function_spec(),     % function def used spawn this node
-% spec:
-%   dependencies : []
-%   unmodifiable : [ spawn_vertex_function_spec, vertex ]
-% update_state( { add_vertex, .. }, .. )
-% update_state( { add_edge, .. }, .. )
-% add_vertex( Vertex, PluginState )
-% add_edge( Edge, PluginState )
-
-% my_plugin
-% spec:
-%   dependencies : [graph]
-% update_graph(GraphState) ->
-%     graph:add_edge( {GraphState.vertex, my_vertex}, graph:add_vertex( my_vertex, GraphState ) );
-% update_state( ... ) ->
-%     Graph = caffe:get_plugin_state( graph, State );
-%     caffe:process_event( { add_edge, Graph.vertex, my_vertex}, caffe:process_event( { add_vertex, my_vertex }, State ) )
