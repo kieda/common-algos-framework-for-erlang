@@ -17,8 +17,7 @@
 
 % helper functions for analyzing the result of a diff
 get_diff_added({added, Added}) -> Added;
-get_diff_added({added, Added, _, _}) -> Added;
-get_diff_added(_) -> none.
+get_diff_added({added, Added, _, _}) -> Added.
 
 get_diff_removed({_, _, removed, Removed}) -> Removed;
 get_diff_removed({removed, Removed}) -> Removed;
@@ -51,12 +50,12 @@ diff_deep_tuple(A, B) ->
   Diff = diff_deep_tuple_samesize(A, B),
   if SizeA == SizeB -> Diff;
      SizeA < SizeB  ->
-       Added = lists_to_tuple(lists:nthtail(tuple_to_list(B), SizeA)),
+       Added = list_to_tuple(lists:nthtail(tuple_to_list(B), SizeA)),
        if Diff == same -> {added, Added};
          true -> {added, Added, changed, Diff}
        end;
      SizeA > SizeB  ->
-       Removed = lists_to_tuple(lists:nthtail(tuple_to_list(A), SizeB)),
+       Removed = list_to_tuple(lists:nthtail(tuple_to_list(A), SizeB)),
        if Diff == same -> {removed, Removed};
          true -> {removed, Removed, changed, Diff}
        end
@@ -81,7 +80,7 @@ diff_deep_list(A, B) ->
     {[], []} -> same;
     {[], _ } -> {added, Added};
     {_ , []} -> {removed, Removed};
-    {_ , _ } -> {added, Added, removed, Removed};
+    {_ , _ } -> {added, Added, removed, Removed}
   end.
 
 % diff maps or whatever deep
@@ -119,3 +118,4 @@ get_exported(M, Functions) ->
 
 apply_function_spec({anonymous, Fun}, Args) -> apply(Fun, Args);
 apply_function_spec({named, ModuleName, FunctionName}, Args) -> apply(ModuleName, FunctionName, Args).
+
