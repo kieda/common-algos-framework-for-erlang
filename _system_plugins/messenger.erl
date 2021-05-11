@@ -30,7 +30,7 @@
 -export([send_message/3, receive_message/2]).                 % use these to send/receive user-based messages
 -export([send_control_message/4, receive_control_message/3]). % use these to send/receive control messages
 -export([get_recently_received/1, get_recently_sent/1]).      % utility functions
--export([dependencies/0, new_plugin/2, update_plugin/3, format/1]).     % implementation - should not be called directly.
+-export([dependencies/0, new_plugin/1, update_plugin/3, format/1]).     % implementation - should not be called directly.
 
 -export_type([accepts/0]).
 
@@ -78,7 +78,7 @@ dependencies() -> [
   graph_state
 ].
 
-new_plugin(Args, _) ->
+new_plugin(Args) ->
   SSize = maps:get(messenger_receive_logsize, Args, ?MESSENGER_DEFAULT_RECEIVE_LOGSIZE),
   RSize = maps:get(messenger_send_logsize, Args, ?MESSENGER_DEFAULT_SEND_LOGSIZE),
   #messenger_state{

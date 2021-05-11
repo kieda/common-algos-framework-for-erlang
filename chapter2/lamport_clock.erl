@@ -1,8 +1,7 @@
 %%%-------------------------------------------------------------------
 %%% @author zkieda
-%%% @copyright (C) 2021, <COMPANY>
 %%% @doc
-%%%
+%%%   Basic lamport clock implementation
 %%% @end
 %%% Created : 21. Mar 2021 8:25 PM
 %%%-------------------------------------------------------------------
@@ -10,7 +9,7 @@
 -author("zkieda").
 
 -export([get_time/1]).                                    % returns time for given state
--export([dependencies/0, new_plugin/2, update_plugin/3]). % implementation
+-export([dependencies/0, new_plugin/1, update_plugin/3]). % implementation
 
 % State
 -record(lamport_clock, {
@@ -24,7 +23,7 @@ dependencies() -> [
   messenger
 ].
 
-new_plugin(_, _) -> #lamport_clock{}.
+new_plugin(_) -> #lamport_clock{}.
 
 % we receive a control message on lamport_clock
 update_plugin({'receive_control', 'lamport_clock', TReceive}, State, C0 = #lamport_clock{c_time = TInternal}) ->

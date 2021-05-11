@@ -1,0 +1,87 @@
+% utility functions
+caffe_util:
+    is_exported(M, F, A) -> boolean
+    get_exported( module, set(function) ) -> #{ function -> [Arity] }
+    apply_function_spec({ anonymous, function } | { named, module, function} ) -> any
+
+    deep_diff
+    diff_is_same( any ) -> boolean
+
+    % possibly remove the following:
+    get_diff_added( any ) -> any
+    get_diff_changed( any ) -> any
+    get_diff_removed( any ) -> any
+
+% basic functionality to deploy a graph of processes.
+% Specify a function to run on each vertex
+% Specify arguments for each function
+caffe_graph:
+    new_spawn_vertex_map(spawn_vertex_list) -> spawn_vertex_map
+    build_network(graph, spawn_vertex_map, vertex_args_map) -> network
+    start_network(network) -> network
+    build_and_start_network(graph, spawn_vertex_map, vertex_args_map) -> network
+    remove_graph_duplicates(graph) -> graph
+    make_bidirectional(graph) -> graph
+    load(module) -> graph
+
+    graph : {[vertex], [edge]}                                                                                          % vertices, edges
+    network : { #{ vertex -> { identifier, vertex_args } }, #{ vertex -> { vertex -> identifier } } }                   % vertices w/args, outgoing edges
+    spawn_vertex_list : [ { [vertex], function_spec } ]                                                                 % vertices -> function vertex should run
+    spawn_vertex_map  : #{ vertex -> function_spec }
+    vertex_args : #{ ... }
+    vertex_args_map : #{ vertex -> vertex_args }
+
+    vertex_args :
+        start_signal_timeout
+
+% generic state-based loop function
+% client defines state and functions to act on the state (passed as arguments)
+caffe:
+    open_caffe
+    make_state_info
+
+    new_state
+    update_state
+    add_order - adds signal to the state
+
+    vertex_args :
+        caffe_wave_wait_time
+        caffe_capture_time
+      +
+        caffe_new_state
+        caffe_update_state
+        caffe_add_order       (optional)
+        caffe_get_state_info  (optional)
+      | caffe_module_impl = { new_state, update_state, add_order, get_state_info }
+
+
+barista:
+    get_plugin_state
+    process_order
+    new_state
+    update_state
+    get_state_info
+    add_order
+
+    barista_state = { new_state, update_state }
+    plugin_id
+    user_func
+
+    vertex_args:
+        barista_user_func
+        barista_plugin_list
+
+    plugin = {dependencies, unmodifiable, new_plugin, update_plugin, invariant}
+
+----
+
+caffe :
+    receive_message
+barista (implementation) :
+    receive_message( M ) ->
+        messenger:receive_message(Message, State)
+      =
+        barista:process_order({'receive', M}, State)
+
+todo: get rid of add_order logic.
+todo: combine caffe, barista, and caffe_new. Just have a basic plugin manager 'caffe'

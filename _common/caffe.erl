@@ -170,7 +170,7 @@ user_func_none() -> {
 % types for functions defined in a plugin:
 % fun( vertex_args, caffe_state ) -> plugin_state
 -type new_plugin(PluginState)
-  :: fun((caffe_graph:vertex_args(caffe_state(UserState)), caffe_state(UserState)) -> PluginState)
+  :: fun((caffe_graph:vertex_args(caffe_state(UserState))) -> PluginState)
    | mfa().
 % fun( Msg, caffe_state, plugin_state ) -> { caffe_state, plugin_state }
 %  | fun( Msg, plugin_state ) -> plugin_state
@@ -260,8 +260,8 @@ get_plugin_impl(Plugin, Module, new_plugin) ->
   % new_plugin( VertexArgs, CurrentState ) -> PluginState
   NewPlugin = sets:from_list(maps:get(new_plugin, Plugin, [])),
   case sets:is_element(2, NewPlugin) of
-    true  -> {Module, new_plugin, 2};
-    false -> throw({bad_plugin, unimplemented, [{new_plugin, 2}]})
+    true  -> {Module, new_plugin, 1};
+    false -> throw({bad_plugin, unimplemented, [{new_plugin, 1}]})
   end;
 get_plugin_impl(Plugin, Module, FunctionName) when
   FunctionName =:= update_plugin;
@@ -418,8 +418,8 @@ new_state(Args, #caffe_args{user_func = UserFunc, plugin_list = Plugins, logging
     fun(PluginID, State0 = #caffe_state{plugin_state_map = PluginStates, plugin_spec_map = Loaded, plugin_callstack = C}) ->
       State1 = State0#caffe_state{plugin_callstack = [PluginID|C]},
       % create plugins from args via new_plugin
-      #plugin_spec{new_plugin = {Module, Function, 2}} = maps:get(PluginID, Loaded),
-      PluginState0 = apply(Module, Function, [Args, State1]),
+      #plugin_spec{new_plugin = {Module, Function, 1}} = maps:get(PluginID, Loaded),
+      PluginState0 = apply(Module, Function, [Args]),
       State2 = State1#caffe_state{plugin_state_map = maps:put(PluginID, PluginState0, PluginStates)},
       ok = log(State2, false, "init = ~p", [ format_plugin(PluginID, State2) ]),
       State2#caffe_state{plugin_callstack = C}

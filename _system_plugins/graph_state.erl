@@ -23,7 +23,7 @@
 %%%
 
 %% API
--export([new_plugin/2, invariant/2, update_plugin/2]).
+-export([new_plugin/1, invariant/2, update_plugin/2]).
 -export([get_outgoing/1, get_outgoing/2, get_vertex/1]).
 
 -record(graph_state, {
@@ -32,7 +32,7 @@
   vertex
 }).
 
-new_plugin(#{outgoing := Outgoing, graph := Graph, vertex := Vertex}, _) -> #graph_state{
+new_plugin(#{outgoing := Outgoing, graph := Graph, vertex := Vertex}) -> #graph_state{
   vertex = Vertex,
   outgoing = Outgoing,
   graph = Graph

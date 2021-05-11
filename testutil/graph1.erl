@@ -14,21 +14,21 @@
 
 vertices() -> [
   vertex_a,
-  vertex_b
-%  vertex_c,
-%  vertex_d,
-%  vertex_e,
-%  vertex_f,
-%  vertex_g
+  vertex_b,
+  vertex_c,
+  vertex_d,
+  vertex_e,
+  vertex_f,
+  vertex_g
 ].
 
 edges() -> [
   {vertex_a, vertex_b}
-%  {vertex_a, vertex_d},
-%  {vertex_b, vertex_d},
-%  {vertex_b, vertex_c},
-%  {vertex_c, vertex_a},
-%  {vertex_f, vertex_c},
-%  {vertex_g, vertex_d},
-%  {vertex_d, vertex_a}
+  {vertex_a, vertex_d},
+  {vertex_b, vertex_d},
+  {vertex_b, vertex_c},
+  {vertex_c, vertex_a},
+  {vertex_f, vertex_c},
+  {vertex_g, vertex_d},
+  {vertex_d, vertex_a}
 ].

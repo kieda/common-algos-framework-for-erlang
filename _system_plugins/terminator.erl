@@ -1,6 +1,5 @@
 %%%-------------------------------------------------------------------
 %%% @author zkieda
-%%% @copyright (C) 2021, <COMPANY>
 %%% @doc
 %%%   Simple plugin that exits the
 %%% @end
@@ -10,7 +9,7 @@
 -author("zkieda").
 
 %% API
--export([new_plugin/2, update_plugin/2, should_exit/1]).
+-export([new_plugin/1, update_plugin/2, should_exit/1]).
 -export_type([accepts/0]).
 -type accepts()
   :: {'receive_control', 'terminate', any()}.
@@ -19,7 +18,7 @@
   terminate = false
 }).
 
-new_plugin(_, _) -> #terminator_state{
+new_plugin(_) -> #terminator_state{
   terminate = false
 }.
 
