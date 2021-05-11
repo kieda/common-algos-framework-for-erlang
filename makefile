@@ -5,12 +5,15 @@
 #######################################################################
 # code to compile
 SOURCE = _common/caffe_util.erl \
+	_common/ezpr.erl \
+	_common/cyclic_queue.erl \
 	_common/caffe_graph.erl \
 	_common/caffe.erl \
-	_common/barista.erl \
 	_system_plugins/graph_state.erl \
-	_system_plugins/plugin_manager.erl \
+	_system_plugins/messenger.erl \
 	_system_plugins/terminator.erl \
+	testutil/graph1.erl \
+	testutil/worker_random_messenger.erl \
 	chapter2/lamport_clock.erl \
 	chapter2/vector_clock.erl
 
