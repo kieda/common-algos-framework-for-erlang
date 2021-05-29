@@ -14,6 +14,8 @@ SOURCE = _common/caffe_util.erl \
 	_system_plugins/terminator.erl \
 	testutil/graph1.erl \
 	testutil/worker_random_messenger.erl \
+	testutil/worker_scripted_event.erl \
+	test/test_lamport_clock.erl \
 	chapter2/lamport_clock.erl \
 	chapter2/vector_clock.erl
 

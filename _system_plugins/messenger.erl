@@ -52,15 +52,15 @@
 
 % user/basic messages
 send_message(Msg, Vertex, State) ->
-  caffe:process_order({'send', Vertex, Msg}, State).
+  caffe:process_event({'send', Vertex, Msg}, State).
 receive_message(Msg, State) ->
-  caffe:process_order({'receive', Msg}, State).
+  caffe:process_event({'receive', Msg}, State).
 
 % control messages - we associate a type with each control message
 send_control_message(Msg, Type, Vertex, State) ->
-  caffe:process_order({'send_control', Type, Vertex, Msg}, State).
+  caffe:process_event({'send_control', Type, Vertex, Msg}, State).
 receive_control_message(Msg, Type, State) ->
-  caffe:process_order({'receive_control', Type, Msg}, State).
+  caffe:process_event({'receive_control', Type, Msg}, State).
 
 get_recently_sent(State) ->
   #messenger_state{sent = S} = caffe:get_plugin_state(State, ?MODULE),

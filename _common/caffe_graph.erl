@@ -252,14 +252,19 @@ make_bidirectional(G = {V, E}) ->
   ERev = lists:map(fun({V1, V2}) -> {V2, V1} end, EUnique),
   {V, EUnique ++ ERev}.
 
+% loads a graph from a module. Viable module signatures are
+% graph() -> {V, E} or vertex() -> V, edges() -> E
 -spec load(module()) -> graph() | {error, unimplemented, _}.
 load(GraphName) ->
-  Functions2Implement = [{vertices, 0}, {edges, 0}],
-  Exported = lists:map(fun(I = {FName, Arity}) -> {I, caffe_util:is_exported(GraphName, FName, Arity)} end, Functions2Implement),
-  Unimplemented = lists:filter(fun({_, E}) -> not E end, Exported),
-  case Unimplemented of
-    [] -> {apply(GraphName, vertices, []), apply(GraphName, edges, [])};
-    _ -> {error, unimplemented, lists:map(fun({I, _}) -> I end, Unimplemented)}
+  ModuleFunctions = [vertices, edges, graph],
+  GraphModule = maps:filter(
+    fun(_, Arities) -> lists:member(0, Arities) end,
+    caffe_util:get_exported(GraphName, sets:from_list(ModuleFunctions))
+  ),
+  case GraphModule of
+    #{ vertices := _ , edges := _ } -> {apply(GraphName, vertices, []), apply(GraphName, edges, [])};
+    #{ graph := _ } -> apply(GraphName, graph, []);
+    _ -> {error, unimplemented, ModuleFunctions -- maps:keys(GraphModule)}
   end.
 
 %% Functions - internal utility

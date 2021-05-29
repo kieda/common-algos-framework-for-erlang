@@ -9,9 +9,10 @@
 -module(caffe_util).
 -author("zkieda").
 
-%% API
 -export([is_exported/3, get_exported/2]).
+-export([get_exported_default/3, get_exported_default/4]).
 -export([apply_function_spec/2]).
+-export([table/1]).
 % functions for generating and analyzing diffs. Used analyze changes in the state
 -export([diff_deep/2, diff_is_same/1, get_diff_added/1, get_diff_removed/1, get_diff_changed/1]).
 
@@ -95,6 +96,14 @@ diff_deep(A, B) ->
      true -> {changed, A, B}
   end.
 
+get_exported_default(M, F, Default) -> get_exported_default(M, F, [], Default).
+get_exported_default(M, F, Args, Default) ->
+  case is_exported(M, F, length(Args)) of
+    true  -> apply(M, F, Args);
+    false -> Default
+  end.
+
+
 is_exported(M, F, A) ->
   case erlang:module_loaded(M) of
     false -> code:ensure_loaded(M);
@@ -118,4 +127,8 @@ get_exported(M, Functions) ->
 
 apply_function_spec({anonymous, Fun}, Args) -> apply(Fun, Args);
 apply_function_spec({named, ModuleName, FunctionName}, Args) -> apply(ModuleName, FunctionName, Args).
+
+% array of arrays -> array of maps w/header as keys
+table([Header|Rows]) ->
+  lists:map(fun(Row) -> maps:from_list(lists:zip(Header, Row)) end, Rows).
 

@@ -17,7 +17,7 @@
 -module(caffe).
 
 %%% API to modify state in your caffe %%%
--export([process_order/2, user_func_none/0, get_plugin_state/2]). % accessor functions
+-export([process_event/2, user_func_none/0, get_plugin_state/2]). % accessor functions
 -export([log/2, log/3]).                                          % logging
 -export([args_from_list/1]).                                      % used to construct args to build the network
 -export([build/2, start/1]).                                      % used to build and start the network
@@ -170,7 +170,7 @@ user_func_none() -> {
 % types for functions defined in a plugin:
 % fun( vertex_args, caffe_state ) -> plugin_state
 -type new_plugin(PluginState)
-  :: fun((caffe_graph:vertex_args(caffe_state(UserState))) -> PluginState)
+  :: fun((caffe_graph:vertex_args(caffe_state(UserState::any()))) -> PluginState)
    | mfa().
 % fun( Msg, caffe_state, plugin_state ) -> { caffe_state, plugin_state }
 %  | fun( Msg, plugin_state ) -> plugin_state
@@ -204,6 +204,7 @@ TStart = erlang:system_time(),
   end.
 
 % process a signal - we have two types - basic and control messages
+% these produce different events via the messenger module
 process_signal({'basic', Msg}, State) -> messenger:receive_message(Msg, State);
 process_signal({'control', Type, Msg}, State) -> messenger:receive_control_message(Msg, Type, State);
 process_signal(Any, _) -> throw({'badmatch', Any}).
@@ -226,7 +227,7 @@ open_caffe_helper(State1,
     ShouldExit -> State1;
     % otherwise update state & loop
     true ->
-      % conditional to new State1 incorporating the captured signals (or not)
+      % Captures signals, produces an event for each signal, and processes each event
       State2 = lists:foldl(fun process_signal/2, State1, capture_signals(ReceiveTime)),
 
       % update the state
@@ -259,7 +260,7 @@ get_plugin_impl(Plugin, Module, format) ->
 get_plugin_impl(Plugin, Module, new_plugin) ->
   % new_plugin( VertexArgs, CurrentState ) -> PluginState
   NewPlugin = sets:from_list(maps:get(new_plugin, Plugin, [])),
-  case sets:is_element(2, NewPlugin) of
+  case sets:is_element(1, NewPlugin) of
     true  -> {Module, new_plugin, 1};
     false -> throw({bad_plugin, unimplemented, [{new_plugin, 1}]})
   end;
@@ -315,12 +316,12 @@ load_plugin_spec(PluginID) ->
 -spec get_plugin_state(plugin_id(), caffe_state(_)) -> plugin_state().
 get_plugin_state(PluginID, #caffe_state{plugin_state_map = PluginStates}) -> maps:get(PluginID, PluginStates).
 
-% processes some signal or message
--spec process_order(Message::any(), caffe_state(UserState)) -> caffe_state(UserState).
-process_order(Message, State = #caffe_state{plugin_list = Plugins}) ->
+% processes an arbitrary event, updating the state along the way
+-spec process_event(Message::any(), caffe_state(UserState)) -> caffe_state(UserState).
+process_event(Message, State = #caffe_state{plugin_list = Plugins}) ->
   ok = caffe:log(State, "processing ~p", [Message]),
-  process_order(Message, State, Plugins).
-process_order(Message, State0 = #caffe_state{plugin_spec_map = PluginSpecs, plugin_state_map = PluginStates, plugin_callstack = CallStack}, [Plugin|Plugins]) ->
+  process_event(Message, State, Plugins).
+process_event(Message, State0 = #caffe_state{plugin_spec_map = PluginSpecs, plugin_state_map = PluginStates, plugin_callstack = CallStack}, [Plugin|Plugins]) ->
   State1 = State0#caffe_state{plugin_callstack = [Plugin|CallStack]}, % Append the current plugin we're evaluating to the callstack
   Spec = maps:get(Plugin, PluginSpecs),
   PluginState0 = maps:get(Plugin, PluginStates),
@@ -363,8 +364,8 @@ process_order(Message, State0 = #caffe_state{plugin_spec_map = PluginSpecs, plug
           true -> log(StateNew, false, "old => new : ~p => ~p", [FormatOld, FormatNew])
        end,
   % go through the rest of the plugins % reset the callstack
-  process_order(Message, StateNew#caffe_state{plugin_callstack = CallStack}, Plugins);
-process_order(_, State, []) -> State.
+  process_event(Message, StateNew#caffe_state{plugin_callstack = CallStack}, Plugins);
+process_event(_, State, []) -> State.
 
 -spec current_plugin(caffe_state(UserState::any())) -> plugin_id().
 current_plugin(#caffe_state{plugin_callstack = [Plugin|_]}) -> Plugin;
@@ -436,18 +437,20 @@ new_state(Args, #caffe_args{user_func = UserFunc, plugin_list = Plugins, logging
 
 % transition function Σ -> Σ to update user state
 -spec update_state(caffe_state(UserState)) -> caffe_state(UserState).
-update_state(State = #caffe_state{user_state = UserState, user_func = { _, UpdateUserState }}) -> function_update_state(State, UserState, UpdateUserState);
+update_state(State = #caffe_state{user_state = UserState, user_func = { _, UpdateUserState }}) -> update_state_internal(State, UserState, UpdateUserState);
 update_state(State = #caffe_state{user_state = UserState, user_func = Module}) -> module_update_state(State, UserState, Module).
 
-% update state using an specified function or a module
-function_update_state(State0, UserState0, UpdateUserState) ->
-  {State1, UserState1} = caffe_util:apply_function_spec(UpdateUserState, [State0, UserState0]),
-  State1#caffe_state{user_state = UserState1}.
+% update state using a specified module
 module_update_state(State, UserState, Module) ->
   HasImplementation = caffe_util:is_exported(Module, update_state, 2),
   if HasImplementation ->
-    function_update_state(State, UserState, {named, Module, update_state})
+    update_state_internal(State, UserState, {named, Module, update_state})
   end.
+
+% internal function used for updating state - any additional transformations/logic should be added here.
+update_state_internal(State0, UserState0, UpdateUserState) ->
+  {State1, UserState1} = caffe_util:apply_function_spec(UpdateUserState, [State0, UserState0]),
+  State1#caffe_state{user_state = UserState1}.
 
 % creates a directed acyclic graph of the plugins
 % exception if user specifies cyclic dependencies
