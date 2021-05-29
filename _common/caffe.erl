@@ -28,7 +28,7 @@
 -export_type([caffe_spec/1, caffe_spec_map/1, caffe_spec_list/1]).
 
 %%%
-%%% Caffe Parameters
+%%% Caffe Args
 %%%
 %%% Specify the following in VertexArgs:
 %%%   caffe_user_func         - Required. Defines underlying/user function to run each loop
@@ -37,44 +37,23 @@
 %%%   caffe_receive_time      - time we wait to receive a signal
 %%%   caffe_logging           - logging verbosity on a per-plugin basis
 
-
-% Caffe Parameters - data representation (internal only)
--record(caffe_args, {
-  user_func       = user_func_none(),
-  plugin_list     = [],
-  loop_wait_time  = 0,
-  receive_time    = 0,
-  logging         = []
-}).
-
--type caffe_args(UserState) :: #caffe_args{
+-type caffe_args(UserState) :: #{
   % user function to run
-  user_func       :: user_func(UserState),
+  caffe_user_func       := user_func(UserState),
   % plugins
-  plugin_list     :: [plugin_id()],
+  caffe_plugin_list     := [plugin_id()],
   % how long should we wait in between loops
-  loop_wait_time  :: non_neg_integer(),
+  caffe_loop_wait_time  := non_neg_integer(),
   % if so, how long should we wait?
-  receive_time    :: non_neg_integer()|infinity,
+  caffe_receive_time    := non_neg_integer()|infinity,
   % logging parameters. Use 'caffe' atom to specify verbosity for internal logging
-  logging         :: [{plugin_id(), log_level()}]
+  caffe_logging         := [{plugin_id(), log_level()}]
 }.
 
 % see : caffe:log
 -type log_level() :: quiet % silence output from this plugin
   | plugin_only            % only have output for the plugin within the plugin itself
   | debug.                 % more verbose logging for the plugin. Default setting
-
-% Caffe Args - translate input map to a record
--spec get_caffe_args(caffe_graph:vertex_args(caffe_state(UserState))) -> caffe_args(UserState).
-get_caffe_args(VertexArgs) ->
-  Default = #caffe_args{},
-  #caffe_args{
-    user_func      = maps:get(caffe_user_func, VertexArgs, Default#caffe_args.user_func),
-    plugin_list    = maps:get(caffe_plugin_list, VertexArgs, Default#caffe_args.plugin_list),
-    loop_wait_time = maps:get(caffe_loop_wait_time, VertexArgs, Default#caffe_args.loop_wait_time),
-    receive_time   = maps:get(caffe_receive_time, VertexArgs, Default#caffe_args.receive_time),
-    logging        = maps:get(caffe_logging, VertexArgs, Default#caffe_args.logging)}.
 
 %%%
 %%% State management
@@ -92,8 +71,18 @@ get_caffe_args(VertexArgs) ->
   plugin_callstack = [],
   user_func,
   user_state,
-  logging
+  logging,
+  settings
 }).
+
+% settings provided by the user
+-type caffe_settings() :: #{
+  caffe_loop_wait_time => non_neg_integer(),
+  caffe_receive_time   => non_neg_integer()
+}.
+
+-spec get_setting(caffe_state(any()), atom(), any()) -> any().
+get_setting(#caffe_state{settings = Settings}, Setting, Default) -> maps:get(Setting, Settings, Default).
 
 -opaque caffe_state(UserState) :: #caffe_state{
   %% Basic algo %%
@@ -106,8 +95,9 @@ get_caffe_args(VertexArgs) ->
   plugin_list :: [plugin_id()],                             % list of plugins in-order of evaluation
   plugin_callstack :: [plugin_id()],                        % callstack of plugins
 
-  %% Logging %%
-  logging :: #{ plugin_id() => log_level() }
+  %% Logging/Settings %%
+  logging :: #{ plugin_id() => log_level() },
+  settings :: caffe_settings()
 }.
 
 % State Management - User Function
@@ -118,13 +108,22 @@ get_caffe_args(VertexArgs) ->
   {
     % new_state - create a new state
     new_user_state(UserState),
-    % update_state - updates
+    % update_state - updates state
+    update_user_state(UserState),
+    % auto_capture - do we automatically capture signals and pass them into the framework,
+    %                or is that the responsibility of user_func? Default true
+    boolean()
+  }
+  |
+  {
+    new_user_state(UserState),
     update_user_state(UserState)
   }
 
   % 2. define a module implementation
   %    new_state(VertexArgs) -> {State, UserState}
   %    update_state(State, UserState) -> {State, UserState}
+  %    auto_capture() -> boolean()
   | module().
 
 % new user state
@@ -141,7 +140,8 @@ get_caffe_args(VertexArgs) ->
 -spec user_func_none() -> user_func(any()).
 user_func_none() -> {
   fun(X, _) -> {X, none} end,
-  fun(X, Y) -> {X, Y} end
+  fun(X, Y) -> {X, Y} end,
+  true
 }.
 
 % State Management - Plugins
@@ -210,15 +210,13 @@ process_signal({'control', Type, Msg}, State) -> messenger:receive_control_messa
 process_signal(Any, _) -> throw({'badmatch', Any}).
 
 % function to translate args to an initial state, then run a loop on the state & args.
--spec open_caffe(caffe_graph:vertex_args(State)) -> State.
+-spec open_caffe(caffe_graph:vertex_args(caffe_state(UserState)) | caffe_args(UserState)) -> caffe_state(UserState).
 open_caffe(Args) ->
-  CaffeArgs = get_caffe_args(Args),
-  State = new_state(Args, CaffeArgs),
-  open_caffe_helper(State, CaffeArgs).
+  State = new_state(Args),
+  open_caffe_loop(State).
 
--spec open_caffe_helper(caffe_state(UserState), caffe_args(UserState)) -> caffe_state(UserState) | no_return().
-open_caffe_helper(State1,
-    CaffeArgs = #caffe_args{ loop_wait_time = WaitTime, receive_time = ReceiveTime }) ->
+-spec open_caffe_loop(caffe_state(UserState)) -> caffe_state(UserState) | no_return().
+open_caffe_loop(State1) ->
 
   % get info on current state
   ShouldExit = terminator:should_exit(State1),
@@ -227,17 +225,15 @@ open_caffe_helper(State1,
     ShouldExit -> State1;
     % otherwise update state & loop
     true ->
-      % Captures signals, produces an event for each signal, and processes each event
-      State2 = lists:foldl(fun process_signal/2, State1, capture_signals(ReceiveTime)),
-
       % update the state
-      State3 = update_state(State2),
+      State2 = update_state(State1),
 
       % sleep after updating
+      WaitTime = get_setting(State2, caffe_loop_wait_time, 0),
       ok = if WaitTime > 0 -> timer:sleep(WaitTime);
              true -> ok
            end,
-      open_caffe_helper(State3, CaffeArgs)
+      open_caffe_loop(State2)
   end.
 
 %% we create a digraph with properties private and acyclic
@@ -400,8 +396,12 @@ log(State, FromPlugin, Format, Args) ->
   end.
 
 % translate vertex_args to the initial state, Σ
--spec new_state(caffe_graph:vertex_args(caffe_state(UserState)), caffe_args(UserState)) -> caffe_state(UserState).
-new_state(Args, #caffe_args{user_func = UserFunc, plugin_list = Plugins, logging = Logging}) ->
+-spec new_state(caffe_graph:vertex_args(caffe_state(UserState))) -> caffe_state(UserState).
+new_state(Args) ->
+  UserFunc = maps:get(caffe_user_func, Args, user_func_none()),
+  Plugins = maps:get(caffe_plugin_list, Args, []),
+  Logging = maps:get(caffe_logging, Args, []),
+  Settings = maps:with([caffe_receive_time, caffe_loop_wait_time], Args),
 
   % we auto-load all dependent plugins, order them such that dependent plugins are before plugins that depend on it
   {Dag, LoadedPlugins} = create_plugin_dag(Plugins),
@@ -413,7 +413,8 @@ new_state(Args, #caffe_args{user_func = UserFunc, plugin_list = Plugins, logging
     plugin_list = PluginList,
     user_state = none,
     user_func = UserFunc,
-    logging = maps:from_list(Logging)},
+    logging = maps:from_list(Logging),
+    settings = Settings},
   % Load each plugin, accumulate into State1. Iterates according to calculated dag order for the dependencies..
   State1 = lists:foldl(
     fun(PluginID, State0 = #caffe_state{plugin_state_map = PluginStates, plugin_spec_map = Loaded, plugin_callstack = C}) ->
@@ -437,18 +438,27 @@ new_state(Args, #caffe_args{user_func = UserFunc, plugin_list = Plugins, logging
 
 % transition function Σ -> Σ to update user state
 -spec update_state(caffe_state(UserState)) -> caffe_state(UserState).
-update_state(State = #caffe_state{user_state = UserState, user_func = { _, UpdateUserState }}) -> update_state_internal(State, UserState, UpdateUserState);
+update_state(State = #caffe_state{user_state = UserState, user_func = { _, UpdateUserState, AutoCapture }}) -> update_state_internal(State, UserState, AutoCapture, UpdateUserState);
+update_state(State = #caffe_state{user_state = UserState, user_func = { _, UpdateUserState }}) -> update_state_internal(State, UserState, true, UpdateUserState);
 update_state(State = #caffe_state{user_state = UserState, user_func = Module}) -> module_update_state(State, UserState, Module).
 
 % update state using a specified module
 module_update_state(State, UserState, Module) ->
-  HasImplementation = caffe_util:is_exported(Module, update_state, 2),
-  if HasImplementation ->
-    update_state_internal(State, UserState, {named, Module, update_state})
+  case caffe_util:is_exported(Module, update_state, 2) of
+    true -> AutoCapture = caffe_util:get_exported_default(Module, auto_capture, [], true),
+            update_state_internal(State, UserState, AutoCapture, {named, Module, update_state});
+    false -> throw({function_clause, Module, update_state, 2})
   end.
 
 % internal function used for updating state - any additional transformations/logic should be added here.
-update_state_internal(State0, UserState0, UpdateUserState) ->
+update_state_internal(State0, UserState0, AutoCapture, UpdateUserState) ->
+  % Captures signals, produces an event for each signal, and processes each event
+  State1 = if AutoCapture ->
+                ReceiveTime = get_setting(State0, caffe_receive_time, 0),
+                lists:foldl(fun process_signal/2, State0, capture_signals(ReceiveTime));
+              true -> State0
+           end,
+
   {State1, UserState1} = caffe_util:apply_function_spec(UpdateUserState, [State0, UserState0]),
   State1#caffe_state{user_state = UserState1}.
 
