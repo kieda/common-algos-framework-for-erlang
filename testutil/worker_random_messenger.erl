@@ -25,7 +25,7 @@ inc_id(State = #{unique_id := I}) ->
   maps:update(unique_id, I + 1, State).
 
 update_state(State, UserState = #{message_probability := P, wait_time := T}) ->
-  SendMessagesTo = lists:filter(fun(_) -> random:uniform() =< P end, graph_state:get_outgoing(State)),
+  SendMessagesTo = lists:filter(fun(_) -> rand:uniform() =< P end, graph_state:get_outgoing(State)),
   lists:foldl(fun(V, {StateA, UserStateA}) ->
                 Message = lists:concat([graph_state:get_vertex(StateA), next_id(UserStateA)]),
                 StateB = messenger:send_message(Message, V, StateA),

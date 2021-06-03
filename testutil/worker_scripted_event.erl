@@ -11,7 +11,7 @@
 
 %%
 -export([load/1]).
--export([new_state/1, update_state/2]).
+-export([new_state/1, auto_capture/0, update_state/2]).
 
 -record(scripted_network_params, {
   graph,
@@ -20,6 +20,7 @@
   plugins,
   args
 }).
+
 % representation of the module we can load from
 -type scripted_network_params() :: #scripted_network_params{
   graph   :: caffe_graph:graph(),
@@ -113,22 +114,44 @@ load(Module) ->
 % as we progress through events queued and move them into completed
 -record(worker_state, {
   events_scripted,
-  tests_scripted,
-  events_completed = [],
-  tests_completed = #{}
+  tests_scripted
 }).
 
 new_state(#{worker_scripted_events := Events, worker_scripted_event_tests := Tests}) ->
   #worker_state{
     events_scripted = Events,
-    tests_scripted = Tests,
-    % plugin_id -> empty lists
-    tests_completed = maps:from_keys(maps:keys(Tests), [])
+    tests_scripted = Tests
   }.
 
-update_state(State, UserState = #worker_state{
+% we manually capture items
+auto_capture() -> false.
+
+check_result(Plugin, State, ExpectedState) ->
+  case caffe_util:is_exported(Plugin, format, 1) of
+    true -> ActualState = apply(Plugin, format, [caffe:get_plugin_state(Plugin, State)]),
+      if ExpectedState == ActualState ->
+        caffe:log(State, "test passed ~w: ~p\n", [Plugin, ExpectedState]),
+        ok;
+        true -> throw({invariant, Plugin, ExpectedState, ActualState, graph_state:get_vertex(State)})
+      end;
+    false -> throw({undef, Plugin, compare})
+  end.
+
+update_state(State, #worker_state{
       events_scripted = [Event|Events],
-      tests_scripted = Tests }) -> unimplemented;
+      tests_scripted = Tests }) ->
+  State2 = case Event of
+    {'receive', Messages} -> messenger:wait_messages(State, Messages);
+    _ -> caffe:process_event(Event, State)
+  end,
+  Rest = maps:map(
+    fun(Module, [Test|Tail]) ->
+      ok = check_result(Module, State2, Test),
+      Tail
+    end,
+    Tests
+  ),
+  {State2, #worker_state{events_scripted = Events, tests_scripted = Rest}};
 %%  case Event of
 %%    {'internal', Msg} -> ;
 %%    {'send', Vertex, Msg} -> ;
@@ -143,7 +166,8 @@ update_state(State, UserState = #worker_state{
 %%    Tests
 %%  )
 %%  update_state(State, UserState#worker_state{events_scripted = Events, tests_scripted = Tests});
-update_state(State, #worker_state{ events_scripted = [], tests_scripted = []}) -> State.
+update_state(State, S = #worker_state{ events_scripted = [], tests_scripted = _ }) ->
+  {terminator:terminate(State), S}.
 
 % we can enforce ordering on individual vertices, but is it possible to
 % receive events out of order?

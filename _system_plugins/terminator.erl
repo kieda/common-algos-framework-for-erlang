@@ -9,7 +9,8 @@
 -author("zkieda").
 
 %% API
--export([new_plugin/1, update_plugin/2, should_exit/1]).
+-export([should_exit/1, terminate/1]).
+-export([new_plugin/1, update_plugin/2, dependencies/0]).
 -export_type([accepts/0]).
 -type accepts() :: {'receive', 'terminate'}
   | {'receive_control', 'terminator', boolean()}.
@@ -18,6 +19,9 @@
   terminate = false
 }).
 
+dependencies() -> [
+  messenger
+].
 new_plugin(_) -> #terminator_state{
   terminate = false
 }.
@@ -29,3 +33,7 @@ update_plugin(_, _) -> ignore.
 should_exit(State) ->
   #terminator_state{terminate = Val} = caffe:get_plugin_state(?MODULE, State),
   Val.
+
+terminate(State) ->
+  % simulate receiving a terminate message
+  messenger:receive_message(terminate, State).

@@ -9,6 +9,7 @@
 -author("zkieda").
 
 -export([get_time/1]).                                    % returns time for given state
+-export([format/1]).
 -export([dependencies/0, new_plugin/1, update_plugin/3]). % implementation
 
 -export_type([accepts/0]).
@@ -28,6 +29,8 @@
 dependencies() -> [
   messenger
 ].
+
+format(#lamport_clock{c_time = T}) -> T.
 
 new_plugin(_) -> #lamport_clock{}.
 

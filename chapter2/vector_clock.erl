@@ -10,6 +10,7 @@
 
 -export([dependencies/0, new_plugin/1, update_plugin/3]).
 -export([get_time/1, compare/2, less_equal/2]).
+-export([format/1]).
 
 -export_type([vector_clock/0]).
 
@@ -26,6 +27,8 @@ dependencies() -> [
   graph_state,
   messenger
 ].
+
+format(V) -> V.
 
 -spec new_plugin(caffe_graph:vertex_args(any())) -> vector_clock().
 new_plugin(#{ graph := {V, _} }) ->

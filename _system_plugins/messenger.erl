@@ -24,12 +24,14 @@
 
 -define(MESSENGER_DEFAULT_RECEIVE_LOGSIZE, 10).
 -define(MESSENGER_DEFAULT_SEND_LOGSIZE, 10).
+-define(MESSENGER_DEFAULT_RECEIVE_TIME, 50).
 
 %% API
 
 -export([send_message/3, receive_message/2]).                 % use these to send/receive user-based messages
 -export([send_control_message/4, receive_control_message/3]). % use these to send/receive control messages
 -export([get_recently_received/1, get_recently_sent/1]).      % utility functions
+-export([wait_message/1, wait_message/2, wait_messages/2]).
 -export([dependencies/0, new_plugin/1, update_plugin/3, format/1]).     % implementation - should not be called directly.
 
 -export_type([accepts/0]).
@@ -45,7 +47,8 @@
 %% plugin state
 -record(messenger_state, {
   sent,
-  received
+  received,
+  receive_time
 }).
 
 %% public accessors
@@ -81,9 +84,11 @@ dependencies() -> [
 new_plugin(Args) ->
   SSize = maps:get(messenger_receive_logsize, Args, ?MESSENGER_DEFAULT_RECEIVE_LOGSIZE),
   RSize = maps:get(messenger_send_logsize, Args, ?MESSENGER_DEFAULT_SEND_LOGSIZE),
+  RcvTime = maps:get(messenger_receive_time, Args, ?MESSENGER_DEFAULT_RECEIVE_TIME),
   #messenger_state{
     sent = cyclic_queue:new(SSize), % send
-    received = cyclic_queue:new(RSize) % receive
+    received = cyclic_queue:new(RSize), % receive
+    receive_time = RcvTime
   }.
 
 update_plugin({'receive', Msg}, State, P = #messenger_state{received = R}) ->
@@ -103,3 +108,35 @@ update_plugin({'send_control', Type, Vertex, Msg}, State, P) ->
   PID ! {'control', Type, Msg}, % send control message along outgoing PID
   {State, P};
 update_plugin(_, _, _) -> ignore.
+
+% wait for any incoming batched messages and process it
+wait_message(State) ->
+  P = caffe:get_plugin_state(?MODULE, State),
+  receive Message -> process_message(Message, State)
+  after P#messenger_state.receive_time -> State
+  end.
+
+% wait for a specific incoming message and process it
+wait_message(State, Message) ->
+  P = caffe:get_plugin_state(?MODULE, State),
+  case Message of
+    {basic, Basic} ->
+      receive {basic, Basic} -> process_message({basic, Basic}, State)
+      after P#messenger_state.receive_time -> State
+      end;
+    {control, Type} ->
+      receive {control, Type, Control} -> process_message({control, Type, Control}, State)
+      after P#messenger_state.receive_time -> State
+      end
+  end.
+
+% waits for all listed messages to be received
+wait_messages(State, [Message|Messages]) ->
+  wait_messages(wait_message(State, Message), Messages);
+wait_messages(State, []) -> State.
+
+% process a signal - we have two types - basic and control messages
+% these produce different events via the messenger module
+process_message({'basic', Msg}, State) -> receive_message(Msg, State);
+process_message({'control', Type, Msg}, State) -> receive_control_message(Msg, Type, State);
+process_message(Any, _) -> throw({'badmatch', Any}).

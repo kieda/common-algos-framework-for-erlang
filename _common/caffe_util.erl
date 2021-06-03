@@ -103,7 +103,6 @@ get_exported_default(M, F, Args, Default) ->
     false -> Default
   end.
 
-
 is_exported(M, F, A) ->
   case erlang:module_loaded(M) of
     false -> code:ensure_loaded(M);
