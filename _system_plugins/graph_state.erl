@@ -24,7 +24,7 @@
 
 %% API
 -export([new_plugin/1, invariant/2, update_plugin/2]).
--export([get_outgoing/1, get_outgoing/2, get_vertex/1]).
+-export([get_outgoing/1, get_incoming/1, get_outgoing/2, get_vertex/1]).
 
 -record(graph_state, {
   outgoing,
@@ -60,5 +60,13 @@ get_outgoing(State) ->
 get_outgoing(Vertex, State) ->
   #graph_state{outgoing = O} = caffe:get_plugin_state(?MODULE, State),
   maps:get(Vertex, O).
+
+% lists all incoming vertices for this vertex
+get_incoming(State) ->
+  #graph_state{vertex = V, graph = {_, E}} = caffe:get_plugin_state(?MODULE, State),
+  lists:filtermap(
+    fun({A, B}) when V == B -> {true, A};
+       (_) -> false
+    end, E).
 %add_vertex(Vertex, PID, State) -> State
 %remove_vertex(Vertex, State) -> State

@@ -20,25 +20,27 @@ graph() -> {
 % scripted events to occur. These are processed in-order
 % 'receive' and 'receive_control' events are special, where we wait until
 % the event is generated externally rather than produced internally.
-events() -> [
-  { vertex_a, [
-    {'internal', internal_a1},
-    {'send', vertex_c, message_a1},
-    {'receive', message_b1},
-    {'internal', internal_a2}
-  ]},
-  { vertex_b, [
-    {'internal', internal_b1},
-    {'receive', message_c1},
-    {'send', vertex_a, message_b1}
-  ]},
-  { vertex_c, [
-    {'receive', message_a1},
-    {'internal', internal_c1},
-    {'send', vertex_b, message_c1},
-    {'internal', internal_c2}
-  ]}
-].
+events() ->
+  Control = [{control, vector_clock}, {control, lamport_clock}],
+  [
+    { vertex_a, [
+      {'internal', internal_a1},
+      {'send', vertex_c, message_a1},
+      {'receive', [{basic, message_b1}|Control]},
+      {'internal', internal_a2}
+    ]},
+    { vertex_b, [
+      {'internal', internal_b1},
+      {'receive', [{basic, message_c1}|Control]},
+      {'send', vertex_a, message_b1}
+    ]},
+    { vertex_c, [
+      {'receive', [{basic, message_a1}|Control]},
+      {'internal', internal_c1},
+      {'send', vertex_b, message_c1},
+      {'internal', internal_c2}
+    ]}
+  ].
 
 % specify values we expect the plugins to be after each event
 tests() -> [
@@ -77,6 +79,8 @@ args() -> #{
   caffe_logging => [
     {messenger, plugin_only},
     {graph_state, quiet},
-    {terminator, plugin_only}
+    {terminator, plugin_only},
+    {lamport_clock, plugin_only},
+    {vector_clock, plugin_only}
   ]
 }.

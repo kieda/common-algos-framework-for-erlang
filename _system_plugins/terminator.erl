@@ -10,10 +10,9 @@
 
 %% API
 -export([should_exit/1, terminate/1]).
--export([new_plugin/1, update_plugin/2, dependencies/0]).
+-export([new_plugin/1, update_plugin/3, dependencies/0]).
 -export_type([accepts/0]).
--type accepts() :: {'receive', 'terminate'}
-  | {'receive_control', 'terminator', boolean()}.
+-type accepts() :: {'receive', caffe_graph:vertex(), 'terminate'}.
 
 -record(terminator_state, {
   terminate = false
@@ -26,9 +25,12 @@ new_plugin(_) -> #terminator_state{
   terminate = false
 }.
 
-update_plugin({'receive', 'terminate'}, Plugin) -> Plugin#terminator_state{terminate = true};
-update_plugin({'receive_control', 'terminator', true}, Plugin) -> Plugin#terminator_state{terminate = true};
-update_plugin(_, _) -> ignore.
+update_plugin({'internal', 'terminate'}, State, Plugin) -> {State, Plugin#terminator_state{terminate = true}};
+update_plugin({'receive', Vertex, 'terminate'}, State, _) ->
+  caffe:log(State, "got terminate signal from ~w", [Vertex]),
+  TState = terminate(State),
+  {TState, caffe:get_plugin_state(terminator, TState)};
+update_plugin(_, _, _) -> ignore.
 
 should_exit(State) ->
   #terminator_state{terminate = Val} = caffe:get_plugin_state(?MODULE, State),
@@ -36,4 +38,4 @@ should_exit(State) ->
 
 terminate(State) ->
   % simulate receiving a terminate message
-  messenger:receive_message(terminate, State).
+  caffe:process_event({internal, terminate}, State).

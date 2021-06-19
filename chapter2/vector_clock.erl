@@ -35,12 +35,12 @@ new_plugin(#{ graph := {V, _} }) ->
   maps:from_list(lists:map(fun(Vertex) -> {Vertex, 0} end, V)).
 
 % receive event : copy over external vector clock and increment local
-update_plugin({'receive_control', 'vector_clock', VReceive}, State, VNow) ->
+update_plugin({'receive_control', 'vector_clock', VIn, VReceive}, State, VNow) ->
   V = graph_state:get_vertex(State),
   VCopied = maps:map(fun(Vertex, VTime) -> max(VTime, maps:get(Vertex, VReceive)) end, VNow),
   TNew = maps:get(V, VCopied) + 1,
   VNew = maps:put(V, TNew, VCopied),
-  caffe:log(State, "receive_control : vector_clock ~s <- ~b, new = ~p", [V, TNew, VNew]),
+  caffe:log(State, "receive_control : vector_clock ~s <- ~s:~b, new = ~p", [V, VIn, TNew, VNew]),
   {State, VNew};
 % internal event : increment vector clock on our local vertex
 update_plugin({'internal', _}, State, VNow) ->

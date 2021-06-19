@@ -22,7 +22,7 @@
 -type accepts()
   :: {'send', caffe_graph:vertex(), any()}
    | {'internal', any()}
-   | {'receive_control', 'lamport_clock', non_neg_integer()}.
+   | {'receive_control', 'lamport_clock', caffe_graph:vertex(), non_neg_integer()}.
 
 % Implementation
 
@@ -35,9 +35,9 @@ format(#lamport_clock{c_time = T}) -> T.
 new_plugin(_) -> #lamport_clock{}.
 
 % we receive a control message on lamport_clock
-update_plugin({'receive_control', 'lamport_clock', TReceive}, State, C0 = #lamport_clock{c_time = TInternal}) ->
+update_plugin({'receive_control', 'lamport_clock', VIn, TReceive}, State, C0 = #lamport_clock{c_time = TInternal}) ->
   C1 = C0#lamport_clock{c_time = max(TReceive, TInternal) + 1},
-  caffe:log(State, "receive_control : lamport_clock <- ~b, new = ~b", [TReceive, C1#lamport_clock.c_time]),
+  caffe:log(State, "receive_control : lamport_clock <- ~w:~b, new = ~b", [VIn, TReceive, C1#lamport_clock.c_time]),
   {State, C1};
 % an internal event has occurred
 update_plugin({'internal', _}, State, C0 = #lamport_clock{c_time = T}) ->

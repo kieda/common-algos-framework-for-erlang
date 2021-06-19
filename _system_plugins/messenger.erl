@@ -28,8 +28,7 @@
 
 %% API
 
--export([send_message/3, receive_message/2]).                 % use these to send/receive user-based messages
--export([send_control_message/4, receive_control_message/3]). % use these to send/receive control messages
+-export([send_message/3, send_control_message/4]).                 % use these to send user-based messages or control messages
 -export([get_recently_received/1, get_recently_sent/1]).      % utility functions
 -export([wait_message/1, wait_message/2, wait_messages/2]).
 -export([dependencies/0, new_plugin/1, update_plugin/3, format/1]).     % implementation - should not be called directly.
@@ -40,14 +39,16 @@
 -type control_type() :: atom().
 -type accepts()
   :: {'send', caffe_graph:vertex(), any()}
-   | {'receive', any()}
+   | {'receive', caffe_graph:vertex(), any()}
    | {'send_control', control_type(), caffe_graph:vertex(), any()}
-   | {'receive_control', control_type(), any()}.
+   | {'receive_control', control_type(), caffe_graph:vertex(), any()}.
 
 %% plugin state
 -record(messenger_state, {
   sent,
+  sent_control,
   received,
+  received_control,
   receive_time
 }).
 
@@ -56,14 +57,14 @@
 % user/basic messages
 send_message(Msg, Vertex, State) ->
   caffe:process_event({'send', Vertex, Msg}, State).
-receive_message(Msg, State) ->
-  caffe:process_event({'receive', Msg}, State).
+receive_message(Msg, Vertex, State) ->
+  caffe:process_event({'receive', Vertex, Msg}, State).
 
 % control messages - we associate a type with each control message
 send_control_message(Msg, Type, Vertex, State) ->
   caffe:process_event({'send_control', Type, Vertex, Msg}, State).
-receive_control_message(Msg, Type, State) ->
-  caffe:process_event({'receive_control', Type, Msg}, State).
+receive_control_message(Msg, Type, Vertex, State) ->
+  caffe:process_event({'receive_control', Type, Vertex, Msg}, State).
 
 get_recently_sent(State) ->
   #messenger_state{sent = S} = caffe:get_plugin_state(State, ?MODULE),
@@ -74,8 +75,11 @@ get_recently_received(State) ->
 
 %% implementation
 
-format(#messenger_state{sent = S, received = R}) ->
-  {sent, cyclic_queue:all(S), received, cyclic_queue:all(R)}.
+format(#messenger_state{sent = S, received = R, sent_control = SC, received_control = RC}) ->
+  #{sent             => cyclic_queue:all(S),
+    received         => cyclic_queue:all(R),
+    sent_control     => cyclic_queue:all(SC),
+    received_control => cyclic_queue:all(RC)}.
 
 dependencies() -> [
   graph_state
@@ -88,25 +92,29 @@ new_plugin(Args) ->
   #messenger_state{
     sent = cyclic_queue:new(SSize), % send
     received = cyclic_queue:new(RSize), % receive
+    sent_control = cyclic_queue:new(SSize),
+    received_control = cyclic_queue:new(RSize),
     receive_time = RcvTime
   }.
 
-update_plugin({'receive', Msg}, State, P = #messenger_state{received = R}) ->
-  caffe:log(State, "receive <- ~s", [Msg]),
-  {State, P#messenger_state{received = cyclic_queue:put(Msg, R)}};
-update_plugin({'receive_control', Type, Msg}, State, P) ->
-  caffe:log(State, "receive_control ~w <- ~w", [Type, Msg]),
-  {State, P};
+update_plugin({'receive', Vertex, Msg}, State, P = #messenger_state{received = R}) ->
+  caffe:log(State, "receive <- ~w:~s", [Vertex, Msg]),
+  {State, P#messenger_state{received = cyclic_queue:put({Msg, Vertex}, R)}};
+update_plugin({'receive_control', Type, Vertex, Msg}, State, P = #messenger_state{received_control = RC}) ->
+  caffe:log(State, "receive_control ~w <- ~w:~w", [Type, Vertex, Msg]),
+  {State, P#messenger_state{received_control = cyclic_queue:put({Type, Msg, Vertex}, RC)}};
 update_plugin({'send', Vertex, Msg}, State, P = #messenger_state{sent = S}) ->
+  Sender = graph_state:get_vertex(State),
   PID = graph_state:get_outgoing(Vertex, State),
   caffe:log(State, "send ~s -> ~w", [Msg, Vertex]),
-  PID ! {'basic', Msg}, % send basic message along outgoing PID
-  {State, P#messenger_state{sent = cyclic_queue:put(Msg, S)}};
-update_plugin({'send_control', Type, Vertex, Msg}, State, P) ->
+  PID ! {'basic', Sender, Msg}, % send basic message along outgoing PID
+  {State, P#messenger_state{sent = cyclic_queue:put({Msg, Vertex}, S)}};
+update_plugin({'send_control', Type, Vertex, Msg}, State, P = #messenger_state{sent_control = SC}) ->
+  Sender = graph_state:get_vertex(State),
   PID = graph_state:get_outgoing(Vertex, State),
   caffe:log(State, "send_control ~w:~w -> ~w", [Type, Msg, Vertex]),
-  PID ! {'control', Type, Msg}, % send control message along outgoing PID
-  {State, P};
+  PID ! {'control', Type, Sender, Msg}, % send control message along outgoing PID
+  {State, P#messenger_state{sent_control = cyclic_queue:put({Type, Msg, Vertex}, SC)}};
 update_plugin(_, _, _) -> ignore.
 
 % wait for any incoming batched messages and process it
@@ -119,13 +127,22 @@ wait_message(State) ->
 % wait for a specific incoming message and process it
 wait_message(State, Message) ->
   P = caffe:get_plugin_state(?MODULE, State),
+  % todo see if we can reorder this into one receive & using guards
   case Message of
     {basic, Basic} ->
-      receive {basic, Basic} -> process_message({basic, Basic}, State)
+      receive {basic, Vertex, Basic} -> process_message({basic, Vertex, Basic}, State)
+      after P#messenger_state.receive_time -> State
+      end;
+    {basic, Vertex, Basic} ->
+      receive {basic, Vertex, Basic} -> process_message({basic, Vertex, Basic}, State)
       after P#messenger_state.receive_time -> State
       end;
     {control, Type} ->
-      receive {control, Type, Control} -> process_message({control, Type, Control}, State)
+      receive {control, Type, Vertex, Control} -> process_message({control, Type, Vertex, Control}, State)
+      after P#messenger_state.receive_time -> State
+      end;
+    {control, Vertex, Type} ->
+      receive {control, Type, Vertex, Control} -> process_message({control, Type, Vertex, Control}, State)
       after P#messenger_state.receive_time -> State
       end
   end.
@@ -137,6 +154,6 @@ wait_messages(State, []) -> State.
 
 % process a signal - we have two types - basic and control messages
 % these produce different events via the messenger module
-process_message({'basic', Msg}, State) -> receive_message(Msg, State);
-process_message({'control', Type, Msg}, State) -> receive_control_message(Msg, Type, State);
+process_message({'basic', Vertex, Msg}, State) -> receive_message(Msg, Vertex, State);
+process_message({'control', Type, Vertex, Msg}, State) -> receive_control_message(Msg, Type, Vertex, State);
 process_message(Any, _) -> throw({'badmatch', Any}).
