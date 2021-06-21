@@ -23,6 +23,8 @@
 -export([build/2, start/1]).                                      % used to build and start the network
 -export([open_caffe/1]).                                          % implementation to run on a vertex. Cheeky name ikr???
 
+-export([wrap_outgoing/3, unwrap_incoming/3]).                    % wraps/unwraps a message based on available plugins. Used by messenger only!
+
 -export_type([caffe_state/1]).
 -export_type([plugin_id/0, user_func/1]).
 -export_type([caffe_spec/1, caffe_spec_map/1, caffe_spec_list/1]).
@@ -288,6 +290,36 @@ load_plugin_spec(PluginID) ->
 % gets plugin state given a plugin_id
 -spec get_plugin_state(plugin_id(), caffe_state(_)) -> plugin_state().
 get_plugin_state(PluginID, #caffe_state{plugin_state_map = PluginStates}) -> maps:get(PluginID, PluginStates).
+
+wrap_outgoing(Msg, Vertex, State = #caffe_state{plugin_list = L}) ->
+  % traverse from left to right, dependencies wrapped first
+  lists:foldl(
+    fun(Module, {Msg0, State0}) ->
+      wrap_unwrap_single(Module, wrap_msg, Msg0, Vertex, State0)
+    end, {Msg, State}, L).
+
+unwrap_incoming(Msg, Vertex, State = #caffe_state{plugin_list = L}) ->
+  % traverse from right to left, dependencies unwrapped last
+  lists:foldr(
+    fun(Module, {Msg0, State0}) ->
+      wrap_unwrap_single(Module, unwrap_msg, Msg0, Vertex, State0)
+    end, {Msg, State}, L).
+
+wrap_unwrap_single(Module, Function, Msg, Vertex, State0 = #caffe_state{plugin_callstack = CallStack}) ->
+  case caffe_util:is_exported(Module, Function, 4) of
+    true -> % set plugin callstack so we're in the Module's environment
+            State1 = State0#caffe_state{plugin_callstack = [Module|CallStack]},
+            % retrieve current plugin state
+            P = get_plugin_state(Module, State1),
+            % call wrap_msg, merge in plugin state
+            {Msg1, State2, P1} = apply(Module, Function, [Msg, Vertex, State1, P]),
+            State3 = State2#caffe_state{plugin_state_map = maps:update(Module, P1, State2#caffe_state.plugin_state_map)},
+            log(State3, false, "%s old => new : ~p => ~p", [Function, Msg, Msg1]),
+            log(State3, false, "%s plugin old => new : ~p => ~p", [Function, format_plugin(Module, State1), format_plugin(Module, State3)]),
+            % pop plugin callstack, return modified message and state
+            {Msg1, State3#caffe_state{plugin_callstack = CallStack}};
+    false -> {Msg, State0}
+  end.
 
 % processes an arbitrary event, updating the state along the way
 -spec process_event(Message::any(), caffe_state(UserState)) -> caffe_state(UserState).

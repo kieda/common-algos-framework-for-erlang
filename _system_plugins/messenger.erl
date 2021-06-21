@@ -58,7 +58,9 @@
 send_message(Msg, Vertex, State) ->
   caffe:process_event({'send', Vertex, Msg}, State).
 receive_message(Msg, Vertex, State) ->
-  caffe:process_event({'receive', Vertex, Msg}, State).
+  % unwrap basic message
+  {Msg1, State1} = caffe:unwrap_incoming(Msg, Vertex, State),
+  caffe:process_event({'receive', Vertex, Msg1}, State1).
 
 % control messages - we associate a type with each control message
 send_control_message(Msg, Type, Vertex, State) ->
@@ -107,8 +109,10 @@ update_plugin({'send', Vertex, Msg}, State, P = #messenger_state{sent = S}) ->
   Sender = graph_state:get_vertex(State),
   PID = graph_state:get_outgoing(Vertex, State),
   caffe:log(State, "send ~s -> ~w", [Msg, Vertex]),
-  PID ! {'basic', Sender, Msg}, % send basic message along outgoing PID
-  {State, P#messenger_state{sent = cyclic_queue:put({Msg, Vertex}, S)}};
+  {Msg1, State1} = caffe:wrap_outgoing(Msg, Vertex, State),
+  caffe:log(State1, "send wrapped ~s -> ~w", [Msg1, Vertex]),
+  PID ! {'basic', Sender, Msg1}, % send basic message along outgoing PID
+  {State1, P#messenger_state{sent = cyclic_queue:put({Msg, Vertex}, S)}};
 update_plugin({'send_control', Type, Vertex, Msg}, State, P = #messenger_state{sent_control = SC}) ->
   Sender = graph_state:get_vertex(State),
   PID = graph_state:get_outgoing(Vertex, State),

@@ -19,7 +19,8 @@ SOURCE = _common/caffe_util.erl \
 	test/test_chandy_lamport.erl \
 	chapter2/lamport_clock.erl \
 	chapter2/vector_clock.erl \
-	chapter3/chandy_lamport.erl
+	chapter3/chandy_lamport.erl \
+	chapter3/lai_yang.erl
 
 #Where include files are stored ".hrl"
 EFLAGS = -I _common \
