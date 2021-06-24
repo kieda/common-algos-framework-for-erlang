@@ -108,9 +108,9 @@ update_plugin({'receive_control', Type, Vertex, Msg}, State, P = #messenger_stat
 update_plugin({'send', Vertex, Msg}, State, P = #messenger_state{sent = S}) ->
   Sender = graph_state:get_vertex(State),
   PID = graph_state:get_outgoing(Vertex, State),
-  caffe:log(State, "send ~s -> ~w", [Msg, Vertex]),
+  caffe:log(State, "send ~w -> ~s", [Msg, Vertex]),
   {Msg1, State1} = caffe:wrap_outgoing(Msg, Vertex, State),
-  caffe:log(State1, "send wrapped ~s -> ~w", [Msg1, Vertex]),
+  caffe:log(State1, "send wrapped ~w -> ~s", [Msg1, Vertex]),
   PID ! {'basic', Sender, Msg1}, % send basic message along outgoing PID
   {State1, P#messenger_state{sent = cyclic_queue:put({Msg, Vertex}, S)}};
 update_plugin({'send_control', Type, Vertex, Msg}, State, P = #messenger_state{sent_control = SC}) ->

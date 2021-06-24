@@ -314,8 +314,8 @@ wrap_unwrap_single(Module, Function, Msg, Vertex, State0 = #caffe_state{plugin_c
             % call wrap_msg, merge in plugin state
             {Msg1, State2, P1} = apply(Module, Function, [Msg, Vertex, State1, P]),
             State3 = State2#caffe_state{plugin_state_map = maps:update(Module, P1, State2#caffe_state.plugin_state_map)},
-            log(State3, false, "%s old => new : ~p => ~p", [Function, Msg, Msg1]),
-            log(State3, false, "%s plugin old => new : ~p => ~p", [Function, format_plugin(Module, State1), format_plugin(Module, State3)]),
+            log(State3, false, "~s old => new : ~p => ~p", [Function, Msg, Msg1]),
+            log(State3, false, "~s plugin old => new : ~p => ~p", [Function, format_plugin(Module, State1), format_plugin(Module, State3)]),
             % pop plugin callstack, return modified message and state
             {Msg1, State3#caffe_state{plugin_callstack = CallStack}};
     false -> {Msg, State0}
