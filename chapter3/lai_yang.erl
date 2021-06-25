@@ -21,31 +21,37 @@
 -export([dependencies/0, format/1, new_plugin/1, update_plugin/3]).
 -export([wrap_msg/4, unwrap_msg/4]).
 
+% represents the snapshot for an individual color
 -record(lai_yang, {
-  snapshot_in_progress = false,
-  % increment when we take a local snapshot
-  % if we receive a message from a previous iteration we know to disregard the message
-  % if we receive a message from a future iteration we update to that count, and start a snapshot if not already in progress
-  color = 0,
+  % has the snapshot been taken for this color yet?
+  snapshot_taken = false,
+  % has the snapshot terminated for this color yet (received all messages we expected?)
+  terminal = false,
   % number of presnapshot messages expected on each incoming channel
   incoming_counter = #{},
   % number of presnapshot messages sent to each outgoing channel
   outgoing_counter = #{},
   % current calculated channel state
   channel_state = #{},
-  % final channel snapshot
-  channel_snapshot = #{},
   % used to store snapshot captured
   snapshot = none
 }).
 
--type lai_yang() :: #lai_yang{
-  snapshot_in_progress :: boolean(),
-  color :: non_neg_integer(),
-  incoming_counter :: #{ caffe_graph:vertex() => non_neg_integer() },
+-type color_snapshot() :: #lai_yang{
+  snapshot_taken :: boolean(),
+  terminal :: boolean(),
+  % incoming may be negative if we receive presnapshot messages but are not taking a snapshot
+  % if both send and receive events are presnapshot then the message should not be included in the channel state
+  incoming_counter :: #{ caffe_graph:vertex() => integer() },
   outgoing_counter :: #{ caffe_graph:vertex() => non_neg_integer() },
   channel_state :: #{ caffe_graph:vertex() => [any()]},
   snapshot :: caffe:caffe_state(any())
+}.
+
+% represents the current snapshot state for each color
+% we apply classic lai_yang but track each color independently
+-type lai_yang() :: #{
+  non_neg_integer() => color_snapshot()
 }.
 
 dependencies() -> [
@@ -53,143 +59,188 @@ dependencies() -> [
   messenger
 ].
 
-format(#lai_yang{snapshot_in_progress = S,
-  color = T,
-  outgoing_counter = O,
-  incoming_counter = I,
-  channel_state = C}) -> #{
-    snapshot_in_progress => S,
-    color => T,
-    outgoing => O,
-    incoming => I,
-    channel_state => C}.
+-spec current_color(lai_yang()) -> non_neg_integer().
+current_color(P) ->
+  SnapshotTaken = maps:filter(fun(_, #lai_yang{snapshot_taken = B}) -> B end, P),
+  lists:max([-1|maps:keys(SnapshotTaken)]) + 1.
+
+% this is for scrubbing purposes - we want to get rid of all earlier terminal entries, but
+% keep the newest of the earlier terminal entries
+smallest_relevant(P) when map_size(P) =:= 0 -> 0;
+smallest_relevant(P) ->
+  Colors = maps:keys(P),
+  NonTerminal = maps:filter(fun(_, #lai_yang{terminal = T}) -> not T end, P),
+  % smallest non terminal entry
+  SmallestNonTerminal = lists:min([lists:max(Colors)|maps:keys(NonTerminal)]),
+  % terminal entries before the smallest non terminal
+  EarlierTerminalEntries = lists:filter(fun(Color) -> Color < SmallestNonTerminal end, Colors),
+  case EarlierTerminalEntries of
+    [] -> SmallestNonTerminal;
+    _ -> lists:max(EarlierTerminalEntries)
+  end.
+
+scrub(P) when map_size(P) =:= 0 -> P;
+scrub(P) ->
+  % get the minimum color of a snapshot currently in progress, or just use the current max if none are in progress
+  MinColor = smallest_relevant(P),
+  % keep all snapshots greater than or equal to the minimum in progress
+  maps:filter(fun(Color, _) -> Color >= MinColor end, P).
+
+format(P) ->
+  % grab the snapshot(s) in progress along with along with snapshot(s) of a higher color
+  % todo we can probably combine these into a single snapshot by aggregating incoming/outgoing counters and channel states
+  % any( snapshot_taken ), sum( incoming_counter ) by vertex, sum( outgoing_counter ) by vertex, union( channel_state ) by vertex
+  maps:map(fun(_, #lai_yang{
+                    terminal = T,
+                    snapshot_taken = B,
+                    incoming_counter = I,
+                    outgoing_counter = O,
+                    channel_state = C}) ->
+             #{terminal => T,
+               snapshot_taken => B,
+               incoming => I,
+               outgoing => O,
+               channel_state => C}
+           end, P).
 
 -spec new_plugin(caffe_graph:vertex_args(caffe:caffe_state(any()))) -> lai_yang().
-new_plugin(_) ->
-  #lai_yang{}.
+new_plugin(_) -> #{}.
+
+take_snapshots(State0, ColorMax) ->
+  P = caffe:get_plugin_state(?MODULE, State0),
+  % largest terminal that is not preceded by non-terminal color
+  ColorStart = smallest_relevant(P),
+  Snapshots2Take = lists:filter(
+    fun(Color) ->
+      #lai_yang{ snapshot_taken = B } = maps:get(Color, P, #lai_yang{}),
+      not B
+    end,
+    lists:seq(ColorStart, ColorMax)),
+  caffe:log(State0, "taking snapshots for colors ~s", [Snapshots2Take]),
+  lists:foldl(
+    fun(Color, StateA) -> take_snapshot(StateA, Color)
+    end, State0, Snapshots2Take).
 
 % decorates all outgoing basic messages with lai_yang markers
 % plugins with wrap_msg are called right before message has actually been sent, after send event has been processed
-wrap_msg(Msg, Vertex, State, P = #lai_yang{snapshot_in_progress = S, color = T, outgoing_counter = O}) ->
+wrap_msg(Msg, Vertex, State, P) ->
+  Color = current_color(P),
+  LaiYang = #lai_yang{ snapshot_taken = B, outgoing_counter = O } = maps:get(Color, P, #lai_yang{}),
+
   % update counter if we are presnapshot
-  caffe:log(State, "decorate basic message with ~s:~b", [Vertex, T]),
-  O2 = case S of
-         false ->
-           NewCounter = maps:get(Vertex, O, 0) + 1,
-           caffe:log(State, "counter on ~s <- ~b", [Vertex, NewCounter]),
-           maps:put(Vertex, NewCounter, O);
-         true -> O
+  caffe:log(State, "decorate basic message to ~s with ~b", [Vertex, Color]),
+  % B should be false, current color will always be presnapshot
+  ok = case B of
+         true -> {invariant, Vertex, Color, LaiYang};
+         false -> ok
        end,
-  {{lai_yang, Msg, T}, State, P#lai_yang{outgoing_counter = O2}}.
-% undecorates all incoming messages for lai_yang algo
-% plugins with unwrap_msg are called immediately after reception, before receive event occurs
-unwrap_msg({lai_yang, Msg, TReceive}, Vertex, State, #lai_yang{color = TInternal})
-    when TReceive > TInternal -> % we receive a higher coloring, take a snapshot
-  caffe:log(State, "undecorate basic message from ~s:true", [Vertex]),
-  % update the color and take a snapshot
-  State1 = take_snapshot_internal(update_color(State, TReceive)),
-  {Msg, State1, caffe:get_plugin_state(?MODULE, State1)};
-unwrap_msg({lai_yang, Msg, TReceive}, Vertex, State,
-    P = #lai_yang{snapshot_in_progress = S, color = TInternal, channel_state = C}) ->
-  caffe:log(State, "undecorate basic message from ~s:false", [Vertex]),
-  % if we are currently taking a snapshot, and we received a message from a previous color
-  % then we incorporate it into the channel's state
-  P2 = case S andalso TReceive < TInternal of
-    true -> % 1. update channel state with new message
-            caffe:log(State, "snapshot state receive <- ~s:~p", [Vertex, Msg]),
-            C2 = maps:update_with(Vertex, fun(ChannelState) -> [Msg|ChannelState] end, [Msg], C),
-            % 2. terminate if we received all expected messages on incoming channels
-            check_terminate(State, P#lai_yang{channel_state = C2});
-    false -> P
+  NewCounter = maps:get(Vertex, O, 0) + 1,
+  caffe:log(State, "counter on ~s <- ~b", [Vertex, NewCounter]),
+  LaiYang2 = LaiYang#lai_yang{ outgoing_counter = maps:put(Vertex, NewCounter, O) },
+  P2 = maps:put(Color, LaiYang2, P),
+  % convention: add name as atom as prefix, additional arguments as suffix
+  {{lai_yang, Msg, Color}, State, P2}.
+
+unwrap_msg({lai_yang, Msg, ColorRcv}, Vertex, State0, _) ->
+  caffe:log(State0, "undecorate basic message from ~s@~b", [Vertex, ColorRcv]),
+
+  % take a snapshot for all colors less than this one (when relevant)
+  State1 = take_snapshots(State0, ColorRcv - 1),
+  P1 = caffe:get_plugin_state(?MODULE, State1),
+
+  % incorporate message into snapshot for the color
+  LaiYang = maps:get(ColorRcv, P1, #lai_yang{}),
+  P = case LaiYang#lai_yang.snapshot_taken of
+    % snapshot has been taken for this color
+    % we include the message in the channel state to mark it as received
+    true ->
+      caffe:log(State0, "channel_state ~b include ~s:~p", [ColorRcv, Vertex, Msg]),
+      C = maps:update_with(Vertex, fun(ChannelState) -> [Msg|ChannelState] end, [Msg], LaiYang#lai_yang.channel_state),
+      P2 = maps:put(ColorRcv, LaiYang#lai_yang{channel_state = C}, P1),
+      check_terminate(State0, ColorRcv, P2);
+    % snapshot has not been taken for this color
+    % we do not include the message in the channel state
+    % but mark the message as received by decrementing the incoming counter
+    false ->
+      caffe:log(State0, "channel_state ~b discard ~s:~p", [ColorRcv, Vertex, Msg]),
+      I = maps:update_with(Vertex, fun(Count) -> Count - 1 end, -1, LaiYang#lai_yang.incoming_counter),
+      maps:put(ColorRcv, LaiYang#lai_yang{incoming_counter = I}, P1)
   end,
-  {Msg, State, P2}.
+  {Msg, State0, P}.
 
 % checks state for termination. If the lai_yang should terminate we reset the plugin state
-check_terminate(State, P = #lai_yang{incoming_counter = I, channel_state = C}) ->
+check_terminate(State, Color, P) ->
+  LaiYang = #lai_yang{incoming_counter = I, channel_state = C} = maps:get(Color, P),
   IncomingV = graph_state:get_incoming(State),
   IncomingCounters = lists:map(fun(VertexIn) -> maps:get(VertexIn, I, 0) end, IncomingV),
   IncomingReceived = lists:map(fun(VertexIn) -> length(maps:get(VertexIn, C, [])) + 1 end, IncomingV),
-  caffe:log(State, "incoming counters = ~p", [lists:zip(IncomingV, IncomingCounters)]),
-  caffe:log(State, "incoming received = ~p", [lists:zip(IncomingV, IncomingReceived)]),
+  caffe:log(State, "incoming counters@~b = ~p", [Color, lists:zip(IncomingV, IncomingCounters)]),
+  caffe:log(State, "incoming received@~b = ~p", [Color, lists:zip(IncomingV, IncomingReceived)]),
   case IncomingCounters == IncomingReceived of
     true ->
-      % terminate algo - reset incoming and outgoing counters
-      caffe:log(State, "snapshot end ~p", [{P#lai_yang.snapshot, C}]),
-      % reset incoming_counter, channel_state, and snapshot_in_progress now that we have received all expected messages
-      % outgoing_counter is reset after we send out our control message
-      P#lai_yang{snapshot_in_progress = false, incoming_counter = #{}, channel_state = #{}, channel_snapshot = C};
+      % terminate algo for the given color, scrub old snapshots
+      caffe:log(State, "snapshot@~b end ~p", [Color, {LaiYang#lai_yang.snapshot, C}]),
+      scrub(maps:put(Color, LaiYang#lai_yang{terminal = true}, P));
     false -> P
   end.
 
-% note: there will only be at most a difference of 1 among colors in strongly connected component (without failure/recovery)
-% proof: the algorithm requires a control message to be received on all incoming vertices as we send Incoming + 1 on the presnap message
-%        thus, algorithm will not set snapshot_in_progress = false until all presnap control messages are received
-%        we will not increment the color unless snapshot_in_progress = false, wherein all vertices in the graph will have the same color because algo terminated
-% note: with failure/recovery we can recover through multiple missed snapshot checkpoints, so long as messages aren't lost
-% proof: todo - though we do accumulate presnap incoming counters. However, logic is a bit finicky wrt termination checking. Will need more concrete proof
-
-update_plugin({internal, new_lai_yang_snapshot}, State0, #lai_yang{snapshot_in_progress = true}) ->
-  % lai_yang already in progress
-  caffe:log(State0, "snapshot already in progress, ignoring"),
-  ignore;
-update_plugin({internal, new_lai_yang_snapshot}, State0, #lai_yang{snapshot_in_progress = false, color = T}) ->
-  % new snapshot - increment current color and take the snapshot
-  State1 = take_snapshot_internal(update_color(State0, T + 1)),
+update_plugin({internal, lai_yang_snapshot}, State0, P) ->
+  % perform a snapshot on the current color
+  % will always take a snapshot by definition of current_color
+  State1 = take_snapshot(State0, current_color(P)),
   {State1, caffe:get_plugin_state(?MODULE, State1)};
-update_plugin({internal, lai_yang_snapshot}, State0, #lai_yang{snapshot_in_progress = true}) ->
-  % lai_yang already in progress
-  caffe:log(State0, "snapshot already in progress, ignoring"),
-  ignore;
-update_plugin({internal, lai_yang_snapshot}, State0, P = #lai_yang{snapshot_in_progress = false, color = T, outgoing_counter = O}) ->
-  % 1. specify a new snapshot is in progress
-  P1 = P#lai_yang{snapshot_in_progress = true},
-  caffe:log(State0, "snapshot start @ color ~b", [T]),
-  % 2. send a <presnap, Counter, Color> control message through all outgoing vertices
-  VOut = graph_state:get_outgoing(State0),
-  caffe:log(State0, "sending marker to outgoing ~p", [VOut]),
-  State1 = lists:foldr(
-    fun(V, StateA) ->
-      messenger:send_control_message({presnap, maps:get(V, O, 0) + 1, T}, lai_yang, V, StateA)
-    end, State0, VOut),
-  % 3. take a local snapshot of the internal data, reset outgoing counters as we just sent our presnap message
-  P2 = P1#lai_yang{snapshot = State1, outgoing_counter = #{}},
-  caffe:log(State1, "internal snapshot: ~p", [State1]),
-  {State1, P2};
+update_plugin({internal, lai_yang_snapshot, Color}, State0, P) ->
+  case P of
+    #{ Color := #lai_yang{ snapshot_taken = true } } ->
+      % snapshot already taken for the given color
+      caffe:log(State0, "snapshot already in progress, ignoring"),
+      ignore;
+    _ ->
+      caffe:log(State0, "snapshot start @ color ~b", [Color]),
+      % 1. send a <presnap, Counter, Color> control message through all outgoing vertices
+      #lai_yang{outgoing_counter = Outgoing} = maps:get(Color, P, #lai_yang{}),
+
+      VOut = graph_state:get_outgoing(State0),
+      caffe:log(State0, "sending marker to outgoing ~p", [VOut]),
+      State1 = lists:foldr(
+        fun(V, StateA) ->
+          messenger:send_control_message({presnap, Color, maps:get(V, Outgoing, 0) + 1}, lai_yang, V, StateA)
+        end, State0, VOut),
+      % 2. take local snapshot and specify a new snapshot is in progress
+      P0 = caffe:get_plugin_state(?MODULE, State1),
+      P1 = maps:update_with(Color,
+        fun(LaiYang) -> LaiYang#lai_yang{snapshot_taken = true, snapshot = State1} end,
+        #lai_yang{snapshot_taken = true, snapshot = State1},
+        P0
+      ),
+      {State1, P1}
+  end;
 % receives <presnap, Counter, Color> from VertexIn
-update_plugin({receive_control, lai_yang, VertexIn, {presnap, Counter, T}}, State0, _) ->
-  caffe:log(State0, "receive_control <- ~s:{presnap, ~b, ~b}", [VertexIn, Counter, T]),
-  % 1. update incoming counter and color
-  State1 = update_color(update_incoming(State0, VertexIn, Counter), T),
-  % 2. take a snapshot
-  State2 = take_snapshot_internal(State1),
+update_plugin({receive_control, lai_yang, VertexIn, {presnap, Color, Count}}, State0, _) ->
+  caffe:log(State0, "receive_control <- ~s:{presnap, color:~b, count:~b}", [VertexIn, Color, Count]),
+  % 1. update incoming counter
+  State1 = update_incoming(State0, Color, VertexIn, Count),
+  % 2. take a snapshot at Color (and below)
+  State2 = take_snapshots(State1, Color),
   P1 = caffe:get_plugin_state(?MODULE, State2),
   % 3. check for termination
-  {State2, check_terminate(State2, P1)};
-update_plugin({internal, lai_yang_snapshot, update_incoming, VertexIn, Increment}, State,
-    P0 = #lai_yang{incoming_counter = I}) ->
+  {State2, check_terminate(State2, Color, P1)};
+update_plugin({internal, lai_yang_snapshot, update_incoming, Color, VertexIn, Increment}, State, P) ->
   % only used internally to increment the internal counter of a vertex
-  P1 = P0#lai_yang{
+  LaiYang0 = #lai_yang{incoming_counter = I} = maps:get(Color, P, #lai_yang{}),
+  LaiYang1 = LaiYang0#lai_yang{
     % increment the expected incoming messages
     incoming_counter = maps:update_with(VertexIn, fun(VCount) -> VCount + Increment end, Increment, I)
   },
-  {State, P1};
-update_plugin({internal, lai_yang_snapshot, update_color, ColorNew}, State,
-    P0 = #lai_yang{color = ColorInternal}) ->
-  % only used internally to increase the color - either on message reception or when starting a new lai_yang snapshot
-  P1 = P0#lai_yang{
-    color = max(ColorInternal, ColorNew)
-  },
-  {State, P1};
+  {State, maps:put(Color, LaiYang1, P)};
 update_plugin(_, _, _) -> ignore.
 
-% designates this vertex as an initiator of a snapshot & takes a snapshot using the chandy lamport method
+% designates this vertex as an initiator of a snapshot, takes a snapshot on the next color
 take_snapshot(State) ->
-  caffe:process_event({internal, new_lai_yang_snapshot}, State).
-take_snapshot_internal(State) ->
   caffe:process_event({internal, lai_yang_snapshot}, State).
-
-
-update_incoming(State, Vertex, Increment) ->
-  caffe:process_event({internal, lai_yang_snapshot, update_incoming, Vertex, Increment}, State).
-update_color(State, ColorNew) ->
-  caffe:process_event({internal, lai_yang_snapshot, update_color, ColorNew}, State).
+% takes a snapshot for a specific color. internal only
+take_snapshot(State, Color) ->
+  caffe:process_event({internal, lai_yang_snapshot, Color}, State).
+% updates incoming counter for a given color. internal only
+update_incoming(State, Color, Vertex, Increment) ->
+  caffe:process_event({internal, lai_yang_snapshot, update_incoming, Color, Vertex, Increment}, State).

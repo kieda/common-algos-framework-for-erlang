@@ -17,6 +17,7 @@ SOURCE = _common/caffe_util.erl \
 	testutil/worker_scripted_event.erl \
 	test/test_lamport_clock.erl \
 	test/test_chandy_lamport.erl \
+	test/test_lai_yang.erl \
 	chapter2/lamport_clock.erl \
 	chapter2/vector_clock.erl \
 	chapter3/chandy_lamport.erl \
