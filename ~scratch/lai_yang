@@ -1,0 +1,176 @@
+%% vertex_a sends:
+        {message1, 0, false} -> vertex_b
+        {message2, 0, false} -> vertex_b
+    vertex_a take snapshot
+        {control, 2, 1} -> vertex_b
+
+        {message3, 1, true} -> vertex_b
+        {message4, 1, true} -> vertex_b
+    vertex_a end snapshot (receive {control, 0, 1})
+
+        {message5, 1, false} -> vertex_b
+
+    vertex_a take snapshot
+        {control, 1, 2} -> vertex_b
+        {message6, 2, true} -> vertex_b
+    vertex_a end snapshot (receive {control, 2, 2} and appropriate messages)
+%% vertex_a receives:
+    vertex_a <- {control, 0, 1}
+    vertex_a <- {message7, 1, false}
+    vertex_a <- {message8, 1, false}
+    vertex_a <- {control, 2, 2}
+    vertex_a <- {message9, 2, true}
+
+%% vertex_b sends:
+    vertex_b take snapshot
+        {control, 0, 1} -> vertex_a
+    vertex_b end snapshot (receive {control, 2, 1} and appropriate messages)
+
+        {message7, 1, false} -> vertex_a
+        {message8, 1, false} -> vertex_a
+
+    vertex_b take snapshot
+        {control, 2, 2} -> vertex_a
+        {message9, 2, true} -> vertex_a
+    vertex_b end snapshot
+%% vertex_b receives:
+    vertex_b <- {message1, 0, false}
+    vertex_b <- {message2, 0, false}
+    vertex_b <- {control, 2, 1}
+    vertex_b <- {message3, 1, true}
+    vertex_b <- {message4, 1, true}
+    vertex_b <- {message5, 1, false}
+    vertex_b <- {control, 1, 2}
+    vertex_b <- {message6, 2, true}
+
+=====
+vertex_a execution 1:
+        {message1, 0, false} -> vertex_b
+        {message2, 0, false} -> vertex_b
+    vertex_a take snapshot
+        {control, 2, 1} -> vertex_b
+
+        {message3, 1, true} -> vertex_b
+        {message4, 1, true} -> vertex_b
+        vertex_a <- {message7, 1, false}
+        vertex_a <- {control, 0, 1}
+    vertex_a end snapshot (receive {control, 0, 1})
+        vertex_a <- {message8, 1, false}
+        {message5, 1, false} -> vertex_b
+
+    vertex_a <- {control, 2, 2}
+    vertex_a take snapshot
+        {control, 1, 2} -> vertex_b
+        vertex_a <- {message9, 2, true}
+        {message6, 2, true} -> vertex_b
+    vertex_a end snapshot (receive {control, 2, 2} and appropriate messages)
+vertex_b execution 1:
+    vertex_b <- {message3, 1, true}
+    vertex_b take snapshot
+        {control, 0, 1} -> vertex_a
+        vertex_b <- {message5, 1, false}
+
+        vertex_b <- {message1, 0, false}
+        vertex_b <- {control, 1, 2}
+        vertex_b <- {message2, 0, false}
+        vertex_b <- {control, 2, 1}
+    vertex_b end snapshot (receive {control, 2, 1} and appropriate messages)
+        vertex_b <- {message4, 1, true}
+
+        {message7, 1, false} -> vertex_a
+        {message8, 1, false} -> vertex_a
+
+        vertex_b <- {message6, 2, true}
+    vertex_b take snapshot
+        {control, 2, 2} -> vertex_a
+        {message9, 2, true} -> vertex_a
+    vertex_b end snapshot
+
+===== rearranged into a map
+vertex_a execution 1:
+        {message1, 0, false} -> vertex_b
+        {message2, 0, false} -> vertex_b
+    start snapshot @ 1
+        {control, 2, 1} -> vertex_b
+
+        {message3, 1, true} -> vertex_b
+        {message4, 1, true} -> vertex_b
+        vertex_a <- {message7, 1, false}
+        vertex_a <- {control, 0, 1}
+    end snapshot @ 1
+        vertex_a <- {message8, 1, false}
+        {message5, 1, false} -> vertex_b
+
+    vertex_a <- {control, 2, 2}
+    start snapshot @ 2
+        {control, 1, 2} -> vertex_b
+    end snapshot @ 2
+        vertex_a <- {message9, 2, true}
+        {message6, 2, true} -> vertex_b
+
+vertex_b execution 1:
+    vertex_b <- {message3, 1, true}
+    start snapshot @ 1
+        {control, 0, 1} -> vertex_a
+        vertex_b <- {message5, 1, false}
+
+        vertex_b <- {message1, 0, false}
+        vertex_b <- {control, 1, 2}
+    start snapshot @ 2
+    end snapshot @ 2
+        vertex_b <- {message2, 0, false}
+        vertex_b <- {control, 2, 1}
+    end snapshot @ 1
+        vertex_b <- {message4, 1, true}
+
+        {message7, 1, false} -> vertex_a
+        {message8, 1, false} -> vertex_a
+
+        vertex_b <- {message6, 2, true}
+    vertex_b take snapshot
+        {control, 2, 2} -> vertex_a
+        {message9, 2, true} -> vertex_a
+    vertex_b end snapshot
+
+
+=======
+receiving a higher color on basic msg implies that other vertex took a snapshot, so we should take one too
+receiving any color on control msg implies we should take a snapshot for that color
+
+    { vertex_a, [
+      {'send', vertex_b, message1}, % <message1, color:0>
+      {'send', vertex_b, message2}, % <message2, color:0>
+      {'internal', lai_yang_snapshot}, % kick off algo on vertex_a
+      % send_control <presnap, color:0, count:3> to vertex_b
+      {'send', vertex_b, message3}, % <message3, color:1>
+      {'send', vertex_b, message4}, % <message4, color:1>
+      {'receive', [{control, vertex_b, lai_yang}]}, % color:0, count:0
+      % snapshot end @ color:0 = []
+      {'send', vertex_b, message5}, % <message5, color:1>
+      {'receive', [{basic, {lai_yang, message7, 1}}]}, % <message7, color:1>
+      {'receive', [{control, vertex_b, lai_yang}]}, % color:1, count:3
+      % send_control <presnap, color:1, count:4>
+      {'receive', [{basic, {lai_yang, message9, 2}}]}, % <message9, color:2>
+      {'send', vertex_b, message6}, % <message6, color:2>
+      {'receive', [{basic, {lai_yang, message8, 1}}]}  % <message8, color:1>
+      % snapshot end @ color:1 = [message9, message8]
+    ]},
+    { vertex_b, [
+      {'receive', [{basic, {lai_yang, message3, 1}}]}, % <message3, color:1>
+      % snapshot occurs: received a higher coloring, take a snapshot for all colors less than received
+      % send_control <presnap, color:0, count:1> to vertex_a
+      {'receive', [{basic, {lai_yang, message1, 0}}]}, % <message1, color:0>
+      {'receive', [{control, vertex_a, lai_yang}]}, % color:0, count:3
+      {'receive', [{basic, {lai_yang, message2, 0}}]}, % <message2, color:0>
+      % snapshot end @ color:0 = [message1, message2]
+      {'receive', [{basic, {lai_yang, message4, 1}}]}, % <message4, color:1>
+      {'send', vertex_a, message7}, % <message7, color:1>
+      {'send', vertex_a, message8}, % <message8, color:1>
+      {'internal', lai_yang_snapshot}, % kick off algo on vertex_b
+      % send_control <presnap, color:1, count:3>
+      {'receive', [{basic, {lai_yang, message5, 1}}]}, % <message5, color:1>
+      {'send', vertex_a, message9}, % <message9, color:2>
+      {'receive', [{basic, {lai_yang, message6, 2}}]}, % <message6, color:2>
+      {'receive', [{control, vertex_a, lai_yang}]} % color:1, count:4
+      % snapshot end @ color:1 = [message5]
+    ]}

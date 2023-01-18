@@ -1,0 +1,265 @@
+===================
+=====  Tarry  =====
+===================
+WaveState {
+    Parent : {some, vertex} | none
+    Sent : vertex set
+}
+
+forward(Token, WaveInfo) ->
+    {some, Parent} = WaveState.Parent
+    Possible = {forall X in State.Outgoing | X != Parent and X not in WaveState.Sent }
+
+    if empty(Possible) ->
+        % forward to parent - no other choice possible
+        send_token( WaveInfo, Parent )
+    else ->
+        Next = rand(Possible)
+        WaveState <- {Next => Sent}
+        send_token( WaveInfo, Next )
+    end
+
+receive_token( Token, WaveInfo, VertexIn ) ->
+    case WaveState.Parent of
+        % this is the initiator and we sent token through all outgoing channels
+        none and WaveInfo.Initiator == VertexIn and empty({forall X in State.Outgoing | X not in WaveState.Sent }) ->
+            decide(Token, WaveInfo)
+        none ->
+            WaveState <- {Parent = VertexIn}
+            forward(Token, WaveInfo)
+        {some, Parent) ->
+            forward(Token, WaveInfo)
+    end
+
+wave(WaveName) ->
+    WaveInfo(WaveName).WaveCount ++
+    WaveInfo(WaveName).Initiator = State.Vertex
+    WaveInfo(WaveName) = WaveName
+
+    Possible = {forall X in State.Outgoing}
+    if empty(Possible) ->
+        % nothing to do - decide immediately
+        decide(Token, WaveInfo)
+    else ->
+        % get next vertex we will send a vertex to
+        Next <- rand(Possible)
+        WaveState <- {Next => Sent}
+        send_token( WaveInfo, Next )
+    end
+
+===================
+=====   DFS   =====
+===================
+WaveState {
+    Parent : {some, vertex} | none
+    Sent : vertex set
+}
+
+forward(Token, WaveInfo, VertexIn) ->
+    {some, Parent} = WaveState.Parent
+    Possible = {forall X in State.Outgoing | X != Parent and X not in WaveState.Sent }
+
+    if empty(Possible) ->
+        % forward to parent - no other choice possible
+        send_token( WaveInfo, Parent )
+    else ->
+        % difference - if vertex we received token from is in Possible then we send it back immediatly
+        Next = if VertexIn in Possible then VertexIn else rand(Possible) end
+        WaveState <- {Next => Sent}
+        send_token( WaveInfo, Next )
+    end
+
+receive_token( Token, WaveInfo, VertexIn ) ->
+    case WaveState.Parent of
+        % this is the initiator and we sent token through all outgoing channels
+        none and WaveInfo.Initiator == VertexIn and empty({forall X in State.Outgoing | X not in WaveState.Sent }) ->
+            decide(Token, WaveInfo)
+        none ->
+            WaveState <- {Parent = VertexIn}
+            forward(Token, WaveInfo, VertexIn)
+        {some, Parent) ->
+            forward(Token, WaveInfo, VertexIn)
+    end
+
+wave(WaveName) ->
+    WaveInfo(WaveName).WaveCount ++
+    WaveInfo(WaveName).Initiator = State.Vertex
+    WaveInfo(WaveName) = WaveName
+
+    Possible = {forall X in State.Outgoing}
+    if empty(Possible) ->
+        % nothing to do - decide immediately
+        decide(Token, WaveInfo)
+    else ->
+        % get next vertex we will send a vertex to
+        Next <- rand(Possible)
+        WaveState <- {Next => Sent}
+        send_token( WaveInfo, Next )
+    end
+
+==================
+==== DFS - ID ====
+==================
+
+% we keep track of the list of the visited IDs in the DFS as a part of the System Token
+WaveState {
+    Parent : {some, vertex} | none
+    Sent : vertex set
+}
+SystemToken {
+    Visited : vertex set
+}
+
+forward(Token, WaveInfo, VertexIn) ->
+    {some, Parent} = WaveState.Parent
+    Possible = {forall X in State.Outgoing | X != Parent and X not in WaveState.Sent }
+
+    if empty(Possible) ->
+        % forward to parent - no other choice possible
+        send_token( WaveInfo, Parent )
+    else ->
+        % difference - if vertex we received token from is in Possible then we send it back immediatly
+        Next = if VertexIn in Possible then VertexIn else rand(Possible) end
+        WaveState <- {Next => Sent}
+        send_token( WaveInfo, Next )
+    end
+
+receive_token( Token, WaveInfo, VertexIn ) ->
+    case WaveState.Parent of
+        % this is the initiator and we sent token through all outgoing channels
+        none and WaveInfo.Initiator == VertexIn and empty({forall X in State.Outgoing | X not in WaveState.Sent }) ->
+            decide(Token, WaveInfo)
+        none ->
+            WaveState <- {Parent = VertexIn}
+            forward(Token, WaveInfo, VertexIn)
+        {some, Parent) ->
+            forward(Token, WaveInfo, VertexIn)
+    end
+
+wave(WaveName) ->
+    WaveInfo(WaveName).WaveCount ++
+    WaveInfo(WaveName).Initiator = State.Vertex
+    WaveInfo(WaveName) = WaveName
+
+    Possible = {forall X in State.Outgoing}
+    if empty(Possible) ->
+        % nothing to do - decide immediately
+        decide(Token, WaveInfo)
+    else ->
+        % get next vertex we will send a vertex to
+        Next <- rand(Possible)
+        WaveState <- {Next => Sent}
+        send_token( WaveInfo, Next )
+    end
+
+====================
+===== Awerbuch =====
+====================
+
+WaveState {
+    Child : vertex                  % the next vertex we will forward the token to
+    Sent : vertex set               % vertices we have forwarded the token to
+    Parent : {some, vertex} | none  % the parent in this wave
+    WaitFor : vertex set            % the vertices we are waiting for acknowledgements
+    Acknowledged: vertex set        % vertices we received acknowledgements from
+    Informed: vertex set            % vertices we received inform from - used to mark frond edges
+    Frond: vertex set               % vertices that are frond edges
+}
+
+receive_control( <inform>, VertexIn, WaveInfo ) ->
+    WaveState <- {VertexIn => Informed}
+    case WaveState.Parent of
+        % channel is frond if we have an existing parent on a different vertex
+        {some, P} and P != VertexIn:
+            WaveState <- {VertexIn => Frond}
+        % this is also a frond edge if we receive <inform> and we're the initiator
+        none and WaveInfo.Initiator == State.Vertex:
+            WaveState <- {VertexIn => Frond}
+    end
+    send_control( <ack>, VertexIn, WaveInfo )
+
+receive_control( <ack>, VertexIn, WaveInfo ) ->
+    WaveState <- {VertexIn => Acknowledged}
+    % if we received acks on all the items we're waiting for, forward the token to next vertex
+    % we will only receive <ack> when we're in the process of receiving a token for the for the first time, and before
+    % we forward the token to any other processes. Thus, Next will always be set to the next child in the spanning tree
+    if forall X in WaveState.WaitFor and X in WaveState.Acknowledged
+        % mark X as sent and send token to X
+        WaveState <- {X => Sent}
+        send_token( WaveInfo, WaveState.Child )
+    end
+
+receive_token( Token, WaveInfo, VertexIn ) ->
+    case WaveState.Parent of
+        none and WaveInfo.Initiator == VertexIn and empty {forall X in State.Outgoing | X not in WaveState.Frond and X not in WaveState.Sent} ->
+            % we received the token back at the initiator, and we have sent to all possible outgoing
+            % thus we decide result of the wave
+            decide(Token, WaveInfo)
+        none ->
+            % received token for first time - make this the parent
+            WaveState <- {Parent = VertexIn}
+
+            % update the frond edges -- edges we got Informed from
+            WaveState <- {(X in Informed where X != Parent) => Frond}
+
+            Possible = {forall X in State.Outgoing | X not in WaveState.Frond and X != WaveState.Parent}
+
+            if empty(Possible) ->
+                % forward the token to the new parent if no other option
+                WaveState <- {WaveState.Parent => Sent}
+                send_token( WaveInfo, WaveState.Parent )
+            else ->
+                % get next vertex we will send a vertex to
+                WaveState.Child <- rand(Possible)
+
+                % send <inform> on all outgoing channels, wait for acknowledgement
+                WaveState.WaitFor = {X in State.Outgoing and X != WaveState.Parent and X != WaveState.Child}
+                forall X in WaveState.WaitFor:
+                    send_control( <inform>, X, WaveInfo )
+                end
+
+                % if there is nothing to wait for, we should send the token immediately (will not happen on <ack>)
+                if empty(WaveState.WaitFor)
+                    WaveState <- {WaveState.Child => Sent}
+                    send_token( WaveInfo, WaveState.Child )
+                end
+            end
+        {some, Parent} ->
+            Possible = {forall X in State.Outgoing | X not in WaveState.Frond and X != WaveState.Parent and X not in WaveState.Sent}
+            % forward to parent if no other option, otherwise send to a possible outgoing vertex
+            Next = if empty(Possible) -> Parent
+                   else -> rand(Possible)
+                   end
+            WaveState <- {Next => Sent}
+            send_token( WaveInfo, Next )
+    end
+
+% called at initiator
+wave(WaveName) :
+    WaveInfo(WaveName).WaveCount ++
+    WaveInfo(WaveName).Initiator = State.Vertex
+    WaveInfo(WaveName) = WaveName
+
+    Possible = {forall X in State.Outgoing}
+    if empty(Possible) ->
+        % nothing to do - decide immediately
+        decide(Token, WaveInfo)
+    else ->
+        % get next vertex we will send a vertex to
+        WaveState.Child <- rand(Possible)
+        % send <inform> on all outgoing channels, wait for acknowledgement
+        WaveState.WaitFor = {X in State.Outgoing and X != WaveState.Parent and X != WaveState.Child}
+        forall X in WaveState.WaitFor:
+            send_control( <inform>, X, WaveInfo )
+        end
+        % if there is nothing to wait for, we should send the token immediately (will not happen on <ack>)
+        if empty(WaveState.WaitFor)
+            WaveState <- {WaveState.Child => Sent}
+            send_token( WaveInfo, WaveState.Child )
+        end
+    end
+
+===================
+===== Cidon's =====
+===================
+
