@@ -68,5 +68,8 @@ get_incoming(State) ->
     fun({A, B}) when V == B -> {true, A};
        (_) -> false
     end, E).
+
+% todo - be able to add and remove vertices, dynamically updating the graph
+% todo - this will be predicated on whether or not graph is bidirectional
 %add_vertex(Vertex, PID, State) -> State
 %remove_vertex(Vertex, State) -> State

@@ -13,6 +13,7 @@
 -export([get_exported_default/3, get_exported_default/4]).
 -export([apply_function_spec/2]).
 -export([table/1]).
+-export([rand_elem/1, reservoir/1]).
 % functions for generating and analyzing diffs. Used analyze changes in the state
 -export([diff_deep/2, diff_is_same/1, get_diff_added/1, get_diff_removed/1, get_diff_changed/1]).
 
@@ -131,3 +132,20 @@ apply_function_spec({named, ModuleName, FunctionName}, Args) -> apply(ModuleName
 table([Header|Rows]) ->
   lists:map(fun(Row) -> maps:from_list(lists:zip(Header, Row)) end, Rows).
 
+% gets a random element from a set
+rand_elem(Set) -> reservoir(sets:to_list(Set)).
+
+% uniformly chooses a random element in a singly linked list using the reservoir technique
+% only iterates through it once
+-spec reservoir([any()]) -> any().
+reservoir([Head|Tail]) -> reservoir(Tail, Head, 2).
+reservoir([], Result, _) -> Result;
+reservoir([Head|Tail], Result, N) ->
+  Rand = rand:uniform(N),
+  % probability element i is chosen, N total items in list
+  % = probability i is chosen, i+1 .. N are NOT chosen
+  % = 1/i * i/(i+1) * (i+1)/(i+2) * ... (N-1)/N
+  % = 1/N
+  if Rand == 1 -> reservoir(Tail, Head, N+1);
+    true -> reservoir(Tail, Result, N+1)
+  end.

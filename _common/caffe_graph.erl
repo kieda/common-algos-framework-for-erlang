@@ -63,6 +63,7 @@
 -type edge_list() :: [edge()].
 -type edge() :: {vertex(), vertex()}.
 -type graph() :: {vertex_list(), edge_list()}.
+% todo - add bidirectional option to the graph definition
 
 % Types - Vertex - Parameters
 -type vertex_args(Val) :: #{
